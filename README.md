@@ -27,7 +27,7 @@ The tests need Python 3.12 and no network access. They run in GitHub Actions on 
 Releases are git tags `vX.Y.Z`. Consumers pin a tag, for example:
 
 ```yml
-- uses: epam/ai-dial-sec-sca/actions/sca_merge_results@v0.4.0
+- uses: epam/ai-dial-sec-sca/actions/sca_merge_results@v0.4.1
 ```
 
 The third-party actions are pinned by commit SHA and osv-scanner by the sha256 of its binary (in `actions/sca_query_osv/action.yml`). Trivy is pinned by version only: `aquasecurity/setup-trivy` verifies the download against the checksums published with the same release, not against a value pinned here.
