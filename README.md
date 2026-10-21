@@ -22,6 +22,36 @@ python -m pytest test/sca
 
 The tests need Python 3.12 and no network access. They run in GitHub Actions on every push and pull request to `main`.
 
+## report.json
+
+`sca_merge_results` writes `report.json` (`schema_version` 3): the run header, `tools`, `targets` with their status, the flat `findings` list and, since version 3, a `counts` block. Consumers (for example notifications) read `counts` instead of counting the findings again.
+
+`counts` is computed from the same deduplicated rows as `summary.md`, so the numbers match the summary:
+
+- a vulnerability is unique per package (id + package, plus the version for libraries; findings of one vulnerability under different ids merge by shared aliases, and Trivy's severity wins over OSV's);
+- `fixable` means a fixed version is known (to either scanner), the same rule as the "fixable" in the summary headings;
+- `total` counts the unique vulnerabilities of the whole repository, so a finding present in several targets counts once; `targets` counts them per target id, so the targets do not add up to `total`;
+- a target that is not `ok` (`failed`, `not_applicable`) has its `status` only; the status of a target is its Trivy scan's.
+
+```json
+"counts": {
+  "total": {
+    "all": 5, "fixable": 3,
+    "by_severity": {
+      "CRITICAL": {"all": 1, "fixable": 1},
+      "HIGH": {"all": 2, "fixable": 1},
+      "MEDIUM": {"all": 1, "fixable": 1},
+      "LOW": {"all": 1, "fixable": 0},
+      "UNKNOWN": {"all": 0, "fixable": 0}
+    }
+  },
+  "targets": {
+    "source-development": {"status": "ok", "all": 3, "fixable": 2, "by_severity": {"...": "..."}},
+    "app-1.0": {"status": "failed"}
+  }
+}
+```
+
 ## Versioning
 
 Releases are git tags `vX.Y.Z`. Consumers pin a tag, for example:

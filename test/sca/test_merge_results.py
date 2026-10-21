@@ -125,7 +125,7 @@ def test_report_has_targets_tools_and_one_finding_per_scanner_and_vulnerability(
     }
     run.part("osv", "source-development", osv_native(), osv_status)
     failed, report = run.merge()
-    assert failed == 0 and report["schema_version"] == 2
+    assert failed == 0 and report["schema_version"] == 3
     assert report["tools"] == {
         "trivy": "0.75.0",
         "trivy_db": DB["vulnerability_db_updated_at"],
