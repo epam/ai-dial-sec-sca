@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/actions/*"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "09:00"
+    commit-message:
+      prefix: "ci"
+      include: scope
+    open-pull-requests-limit: 100
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        group-by: "dependency-name"
+        patterns:
+          - "*"
