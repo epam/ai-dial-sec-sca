@@ -185,24 +185,43 @@ def plural(n: int, one: str, many: str) -> str:
 
 
 def totals(libraries: Sequence[Any], os_rows: Sequence[Any]) -> str:
-    no_fix = sum(1 for r in [*libraries, *os_rows] if r["no_fix"])
+    fixable = sum(1 for r in [*libraries, *os_rows] if not r["no_fix"])
     return ", ".join(
         [
             plural(len(libraries), "library", "libraries"),
             plural(len(os_rows), "OS package", "OS packages"),
-            f"{no_fix} without a fix",
+            f"{fixable} fixable",
         ]
     )
 
 
+def unique_vulnerabilities(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The vulnerabilities of package rows, each once by its id and package, whatever
+    the package version (one vulnerability of a package in several versions or
+    targets is one); findings under different ids merge by shared aliases.
+    """
+    found: list[dict[str, Any]] = []
+    index: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    for r in rows:
+        by_name = index.setdefault((r["class"], norm(r["pkg"])), {})
+        for v in r["vulns"]:
+            u = next((by_name[n] for n in v["names"] if n in by_name), None)
+            if u is None:
+                u = {"severity": v["severity"], "fixable": False}
+                found.append(u)
+            u["fixable"] = u["fixable"] or bool(v["fixed"])
+            by_name.update(dict.fromkeys(v["names"], u))
+    return found
+
+
 def severity_block(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Counts of the vulnerabilities of package rows: per severity and overall,
-    ``all`` and ``fixable`` (a fixed version is known, as in ``totals``).
+    """Counts of the unique vulnerabilities of package rows: per severity and
+    overall, ``all`` and ``fixable`` (a fixed version is known).
     """
     by = {s: {"all": 0, "fixable": 0} for s in SEVERITIES}
-    for v in (v for r in rows for v in r["vulns"]):
+    for v in unique_vulnerabilities(rows):
         by[v["severity"]]["all"] += 1
-        by[v["severity"]]["fixable"] += bool(v["fixed"])
+        by[v["severity"]]["fixable"] += v["fixable"]
     return {
         "all": sum(b["all"] for b in by.values()),
         "fixable": sum(b["fixable"] for b in by.values()),
@@ -336,23 +355,68 @@ def count_cell(n: int) -> str:
     return str(n) if n else "-"
 
 
-def versions_table(
+def severity_columns(counts: Sequence[Mapping[str, int]]) -> list[str]:
+    """Critical, High, Medium, Low, and Unknown only when something has it."""
+    return [
+        s
+        for s in SEVERITIES
+        if s != "UNKNOWN" or any(c.get(s, 0) for c in counts)
+    ]
+
+
+def table_lines(
+    head: Sequence[str], rows: Sequence[Sequence[str]], text_columns: int = 1
+) -> list[str]:
+    """A table whose first ``text_columns`` columns are text, the rest numbers."""
+    rule = "|" + "---|" * text_columns + "---:|" * (len(head) - text_columns)
+    return [
+        "| " + " | ".join(head) + " |",
+        rule,
+        *("| " + " | ".join(r) + " |" for r in rows),
+    ]
+
+
+def vulnerabilities_table(
+    by_version: Sequence[tuple[str, set[str]]],
+    version_rows: Mapping[str, Sequence[Mapping[str, Any]]],
+    all_rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Unique vulnerabilities per version and over all; the last row is what
+    ``counts.total`` of report.json holds (the same function over the same rows).
+    """
+    blocks = [(v, severity_block(version_rows[v])) for v, _ in by_version]
+    total = severity_block(all_rows)
+    severities = severity_columns(
+        [{s: b["by_severity"][s]["all"] for s in SEVERITIES} for _, b in blocks]
+        + [{s: total["by_severity"][s]["all"] for s in SEVERITIES}]
+    )
+
+    def cells(block: Mapping[str, Any]) -> list[str]:
+        return [
+            *(count_cell(block["by_severity"][s]["all"]) for s in severities),
+            count_cell(block["fixable"]),
+        ]
+
+    head = ["Branch / tag", *(s.capitalize() for s in severities), "Fixable"]
+    rows = [[cell(v), *cells(b)] for v, b in blocks]
+    rows.append(["**All (unique)**", *cells(total)])
+    return [
+        *table_lines(head, rows),
+        "",
+        "Each vulnerability counted once per row; one present in several branches/tags "
+        "is counted once in the last row.",
+    ]
+
+
+def packages_table(
     report: Mapping[str, Any],
     by_version: Sequence[tuple[str, set[str]]],
     version_rows: Mapping[str, Sequence[Mapping[str, Any]]],
     unique: Sequence[Mapping[str, Any]],
 ) -> list[str]:
-    severities = [
-        s
-        for s in SEVERITIES
-        if s != "UNKNOWN" or any(r["severity"] == s for r in unique)
-    ]
-    head = ["Version", "Scan", *(f"Libs {s[0]}" for s in severities)]
-    head += ["OS pkgs", "No fix"]
-    lines = [
-        "| " + " | ".join(head) + " |",
-        "|---|---|" + "---:|" * (len(head) - 2),
-    ]
+    severities = severity_columns(
+        [{r["severity"]: 1 for r in unique if r["class"] == "lang"}]
+    )
 
     def counts(rows: Sequence[Mapping[str, Any]]) -> list[str]:
         libs = [r for r in rows if r["class"] == "lang"]
@@ -362,66 +426,21 @@ def versions_table(
                 for s in severities
             ),
             count_cell(len(rows) - len(libs)),
-            count_cell(sum(1 for r in rows if r["no_fix"])),
+            count_cell(sum(1 for r in rows if not r["no_fix"])),
         ]
 
-    for version, ids in by_version:
-        cells = [
-            cell(version),
-            cell(scan_cell(report, ids)),
-            *counts(version_rows[version]),
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    total = ["**Unique across versions**", "", *counts(unique)]
-    lines.append("| " + " | ".join(total) + " |")
-    return [
-        *lines,
-        "",
-        "Counts are vulnerable packages by their worst severity. A package present in "
-        "several versions is counted once in the last row; the rows do not add up to "
-        "this line.",
+    head = ["Branch / tag", "Scan", *(s.capitalize() for s in severities)]
+    head += ["OS packages", "Fixable"]
+    rows = [
+        [cell(v), cell(scan_cell(report, ids)), *counts(version_rows[v])]
+        for v, ids in by_version
     ]
-
-
-def vulnerabilities_table(
-    by_version: Sequence[tuple[str, set[str]]],
-    version_rows: Mapping[str, Sequence[Mapping[str, Any]]],
-    unique: Sequence[Mapping[str, Any]],
-) -> list[str]:
-    def vulns(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-        return [v for r in rows for v in r["vulns"]]
-
-    severities = [
-        s
-        for s in SEVERITIES
-        if s != "UNKNOWN" or any(v["severity"] == s for v in vulns(unique))
-    ]
-    head = ["Version", *(s[0] for s in severities), "No fix"]
-    lines = ["| " + " | ".join(head) + " |", "|---|" + "---:|" * (len(head) - 1)]
-
-    def counts(rows: Sequence[Mapping[str, Any]]) -> list[str]:
-        found = vulns(rows)
-        return [
-            *(
-                count_cell(sum(1 for v in found if v["severity"] == s))
-                for s in severities
-            ),
-            count_cell(sum(1 for v in found if not v["fixed"])),
-        ]
-
-    for version, _ in by_version:
-        lines.append(
-            "| " + " | ".join([cell(version), *counts(version_rows[version])]) + " |"
-        )
-    lines.append(
-        "| " + " | ".join(["**Unique across versions**", *counts(unique)]) + " |"
-    )
+    rows.append(["**All (unique)**", "", *counts(unique)])
     return [
-        *lines,
+        *table_lines(head, rows, 2),
         "",
-        "Counts are vulnerabilities (one vulnerability under several ids is one) by "
-        "their own severity; No fix means no fixed version is known. A vulnerability "
-        "of a package present in several versions is counted once in the last row.",
+        "Vulnerable libraries by worst severity; a package in several branches/tags is "
+        "counted once in the last row.",
     ]
 
 
@@ -434,10 +453,11 @@ def version_section(
     os_rows = [r for r in rows if r["class"] == "os"]
     lines = [f"## {cell(version)} - {totals(libraries, os_rows)}", ""]
     if libraries:
-        lines += ["### Libraries", "", *package_table(libraries, columns, True), ""]
+        lines += ["<details><summary>Libraries</summary>", ""]
+        lines += [*package_table(libraries, columns, True), "", "</details>", ""]
     if os_rows:
-        lines += ["### Base image (OS packages)", ""]
-        lines += [*package_table(os_rows, columns, False), ""]
+        lines += ["<details><summary>Base image (OS packages)</summary>", ""]
+        lines += [*package_table(os_rows, columns, False), "", "</details>", ""]
     return lines
 
 
@@ -490,11 +510,11 @@ def build_summary(report: Mapping[str, Any]) -> str:
         for rows in reversed(version_rows.values())
         for r in rows
     }.values()
-    unique = [*unique]
-    lines = header(report) + ["## Versions to fix", ""]
-    lines += [*versions_table(report, by_version, version_rows, unique), ""]
-    lines += ["## Vulnerabilities by version", ""]
-    lines += [*vulnerabilities_table(by_version, version_rows, unique), ""]
+    all_rows = package_rows(findings, source_ids)
+    lines = header(report) + ["## Vulnerabilities", ""]
+    lines += [*vulnerabilities_table(by_version, version_rows, all_rows), ""]
+    lines += ["## Packages to update", ""]
+    lines += [*packages_table(report, by_version, version_rows, [*unique]), ""]
     for version, _ in by_version:
         if version_rows[version]:
             lines += version_section(version, version_rows[version], columns)

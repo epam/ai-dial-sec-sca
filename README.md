@@ -15,14 +15,14 @@ The actions share the code in `actions/_sca_lib` (it is imported through `PYTHON
 
 ## Job summary
 
-`summary.md` is organized by version, because that is what a fixer works with: which dependencies to bump in which release. It has:
+`summary.md` is organized by version (a branch or a release tag), because a fixer needs to know what to bump where. Only two tables and the version headings are visible; everything else is collapsed.
 
-- A `Versions to fix` table, one row per scanned version (`development` first, then releases from the newest). The columns count vulnerable packages by their worst severity (`Libs C`, `H`, `M`, `L`), the vulnerable OS packages of the images, and the packages with no fix (`No fix`). The last row, `Unique across versions`, counts a package once even when several versions have it, so the rows do not add up to it.
-- A `Vulnerabilities by version` table of the same shape: unique vulnerabilities (one under several ids counts once) by their own severity, and how many have no fix known.
-- A section per version that has vulnerable packages: a table of libraries and a table of base image OS packages. A package seen in the source and in the images of one version is one row, with `Seen in` naming where (`src` or the image name). Rows without a fix come last, development-only packages (marked `dev`) after the others, then by severity.
-- A collapsed `Scan details by target` table with the status of every scan, including the failed and not applicable ones.
+- `Vulnerabilities`: one row per scanned version (`development` first, then releases from the newest) with the unique vulnerabilities by their own severity and how many have a fix (`Fixable`). A vulnerability found under several ids counts once, and one present in several versions counts once in the last row, `All (unique)`. That row equals `counts.total` of `report.json`.
+- `Packages to update`: the same rows with the vulnerable libraries by their worst severity, the vulnerable OS packages and how many packages have a fix. A package in several versions counts once in the last row.
+- A section per version with its libraries and base image OS packages, each in a collapsed table. A package seen in the source and in the images of one version is one row, with `Seen in` naming where (`src` or the image name). Rows with a fix come first, development-only packages (marked `dev`) after the others, packages with no fix last, then by severity.
+- `Scan details by target`: the status of every scan, including the failed and not applicable ones.
 
-A package without a fix has no fixed version for any of its vulnerabilities. If only some have one, the package counts as fixable and `Fixed` lists the versions that exist.
+A package is not fixable when none of its vulnerabilities has a fixed version. If only some have one, it counts as fixable and `Fixed` lists the versions that exist.
 
 ## Tests
 
@@ -39,7 +39,7 @@ The tests need Python 3.12 and no network access. They run in GitHub Actions on 
 
 `counts` is computed from the same deduplicated rows as `summary.md`, so the numbers match the summary:
 
-- a vulnerability is unique per package (id + package, plus the version for libraries; findings of one vulnerability under different ids merge by shared aliases, and Trivy's severity wins over OSV's);
+- a vulnerability is unique per package, whatever its version (id + package; findings of one vulnerability under different ids merge by shared aliases, and Trivy's severity wins over OSV's);
 - `fixable` means a fixed version is known (to either scanner), the same rule as the "fixable" in the summary headings;
 - `total` counts the unique vulnerabilities of the whole repository, so a finding present in several targets counts once; `targets` counts them per target id, so the targets do not add up to `total`;
 - a target that is not `ok` (`failed`, `not_applicable`) has its `status` only; the status of a target is its Trivy scan's.
