@@ -8,10 +8,21 @@ These actions are called by the `sca_scheduled.yml` workflow of [epam/ai-dial-ci
 
 - `actions/sca_resolve_targets`: builds the list of scan targets and resolves the releases: the default branch source, the source of each release of the release set, and, per image, `development` and the same release tags. The release set is the newest patch of each of the last `release-lines` (default 2) minor lines (`X.Y.Z` tags of non-prerelease, non-draft GitHub releases), plus at most one candidate. The candidate is the newest prerelease (by version, `X.Y.Z-pre`) whose base version is greater than the newest stable; a prerelease of an already published version is not scanned. A stable release whose tag is not `X.Y.Z` is left out of the set and counted in one notice. The release listing is read page by page (up to 1000 releases). Inputs: `scan-tag` focuses the run on one git tag (its source and the tag in every image, no `development`); `osv-image-scan` is the repository's own setting that switches the direct OSV image scan off; `force-image-scan` runs that scan anyway (a manual run) and marks the run with `forced_image_scan` in `targets.json` and `report.json`. Pass `osv-image-scan` as the repository sets it, not combined with the force flag: the action does the combining.
 - `actions/sca_query_osv`: checks the language packages found by Trivy against OSV with osv-scanner; an image target also gets a direct `osv-scanner scan image`, which reads the image's own package database and so checks its OS packages against OSV correctly (a BOM cannot: OSV keys its records by the source package name). The BOM query runs either way, so a package either detector sees keeps its OSV check.
-- `actions/sca_merge_results`: normalizes the Trivy and OSV reports, merges them into `report.json` and writes the `summary.md` job summary.
+- `actions/sca_merge_results`: normalizes the Trivy and OSV reports, merges them into `report.json` and writes the `summary.md` job summary (see below).
 - `actions/generate_gradle_lockfiles`: generates Gradle lockfiles on the fly so Trivy can resolve Gradle dependencies (repository files are not modified).
 
 The actions share the code in `actions/_sca_lib` (it is imported through `PYTHONPATH=${{ github.action_path }}/..`, so the `actions/` layout must stay as it is).
+
+## Job summary
+
+`summary.md` is organized by version (a branch or a release tag), because a fixer needs to know what to bump where. Only two tables and the version headings are visible; everything else is collapsed.
+
+- `Vulnerabilities`: one row per scanned version (`development` first, then releases from the newest) with the unique vulnerabilities by their own severity and how many have a fix (`Fixable`). A vulnerability found under several ids counts once, and one present in several versions counts once in the last row, `All (unique)`. That row equals `counts.total` of `report.json`.
+- `Packages to update`: the same rows with the vulnerable libraries by their worst severity, the vulnerable OS packages and how many packages have a fix. A package in several versions counts once in the last row.
+- A section per version with its libraries and base image OS packages, each in a collapsed table. A package seen in the source and in the images of one version is one row, with `Seen in` naming where (`src` or the image name). Rows with a fix come first, development-only packages (marked `dev`) after the others, packages with no fix last, then by severity.
+- `Scan details by target`: the status of every scan, including the failed and not applicable ones.
+
+A package is not fixable when none of its vulnerabilities has a fixed version. If only some have one, it counts as fixable and `Fixed` lists the versions that exist.
 
 ## Tests
 
@@ -28,7 +39,7 @@ The tests need Python 3.12 and no network access. They run in GitHub Actions on 
 
 `counts` is computed from the same deduplicated rows as `summary.md`, so the numbers match the summary:
 
-- a vulnerability is unique per package (id + package, plus the version for libraries; findings of one vulnerability under different ids merge by shared aliases, and Trivy's severity wins over OSV's);
+- a vulnerability is unique per package, whatever its version (id + package; findings of one vulnerability under different ids merge by shared aliases, and Trivy's severity wins over OSV's);
 - `fixable` means a fixed version is known (to either scanner), the same rule as the "fixable" in the summary headings;
 - `total` counts the unique vulnerabilities of the whole repository, so a finding present in several targets counts once; `targets` counts them per target id, so the targets do not add up to `total`;
 - a target that is not `ok` (`failed`, `not_applicable`) has its `status` only; the status of a target is its Trivy scan's.
