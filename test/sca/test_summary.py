@@ -6,6 +6,7 @@ from summary import (
     build_summary,
     target_label,
     truncate_summary,
+    versions_of,
 )
 
 
@@ -131,17 +132,16 @@ def test_os_rows_of_one_cve_with_differently_spelled_versions_count_once():
         ),
     ]
     text = build_summary(report([target(tid, kind="image", ref="1.0")], findings))
-    assert line(text, f"| {tid}").endswith("| H–1 |")
-    assert line(text, "| **All targets**").endswith("| — | H–1 |")
+    assert line(text, "| 1.0 |").endswith("| - | - | - | - | 1 | - |")
     # one package row, both scanners on it; the version is Trivy's spelling, the
     # only one shown - both spellings in one cell would read as two installed
     # versions
     row = line(text, "| bash@")
     assert row == (
-        "| bash@5.2.37 | [CVE-9](https://example.test/CVE-9) | 5.2.38, 5.2.38-2+b11 |"
-        " img·1.0 | T+O |"
+        "| bash@5.2.37 | H | 5.2.38, 5.2.38-2+b11 | [CVE-9](https://example.test/CVE-9)"
+        " | app | T+O |"
     )
-    assert "1 packages, 1 vulnerabilities, 1 fixable" in text
+    assert "## 1.0 - 0 libraries, 1 OS package, 0 without a fix" in text
 
 
 def test_an_osv_target_ok_with_a_reason_states_it_in_the_scan_column():
@@ -161,38 +161,36 @@ def test_an_osv_target_ok_with_a_reason_states_it_in_the_scan_column():
 
 
 @pytest.mark.parametrize(
-    "repo, image, ref, label",
+    "repo, image, label",
     [
-        ("ai-dial-chat", "ai-dial-chat-bff", "development", "img·bff·dev"),
-        (
-            "statgpt-backend",
-            "statgpt-admin-backend",
-            "development",
-            "img·statgpt-admin-backend·dev",
-        ),
-        ("app", "app", "development", "img·dev"),
-        ("app", "o/app", "1.0", "img·1.0"),
-        ("app", "o/app", None, "img·?"),
+        ("ai-dial-chat", "ai-dial-chat-bff", "bff"),
+        ("ai-dial-chat", "o/ai-dial-chat", "chat"),
+        ("statgpt-backend", "statgpt-admin-backend", "statgpt-admin-backend"),
+        ("statgpt-backend", "statgpt-backend", "statgpt-backend"),
     ],
 )
-def test_image_label_drops_the_repo_prefix_only_when_it_is_one(repo, image, ref, label):
-    t = {"kind": "image", "image": image, "ref": ref}
+def test_an_image_label_is_its_short_name(repo, image, label):
+    t = {"kind": "image", "image": image, "ref": "1.0"}
     assert target_label(t, repo) == label
+
+
+def test_a_source_label_is_src():
+    assert target_label({"kind": "fs", "image": None, "ref": "1.0"}, "app") == "src"
 
 
 def test_packages_differing_in_case_are_one_row_named_as_in_the_source():
     src = "source-development"
-    targets = [target(src), target("app-1.0", kind="image", ref="1.0")]
+    targets = [target(src), target("app-dev", kind="image", ref="development")]
     findings = [
-        finding("app-1.0", "CVE-1", "PyJWT", severity="HIGH"),
+        finding("app-dev", "CVE-1", "PyJWT", severity="HIGH"),
         finding(src, "CVE-1", "pyjwt", scanner="osv", severity="HIGH"),
-        finding("app-1.0", "CVE-2", "Mako"),
+        finding("app-dev", "CVE-2", "Mako"),
         finding(src, "CVE-3", "mako", severity="LOW"),
     ]
     text = build_summary(report(targets, findings))
     assert "PyJWT@1.0" not in text and "pyjwt@1.0" in text
     assert "Mako@1.0" not in text and text.count("mako@1.0") == 1
-    assert line(text, "| **All targets**").endswith("| H–2&emsp;L–1 | — |")
+    assert "## development - 2 libraries, 0 OS packages, 2 without a fix" in text
 
 
 def test_fixed_versions_of_both_scanners_are_split_and_deduplicated():
@@ -203,7 +201,7 @@ def test_fixed_versions_of_both_scanners_are_split_and_deduplicated():
     ]
     text = build_summary(report([target(src)], findings))
     assert "| 2.18.11, 2.21.7, 2.22.3 |" in text
-    assert "1 fixable" in text
+    assert "1 library, 0 OS packages, 0 without a fix" in text
 
 
 def test_header_has_the_commit_the_tool_versions_and_the_run():
@@ -235,50 +233,10 @@ def test_the_header_names_a_forced_image_scan():
     assert "The direct OSV image scan runs on this run although it is off" in text
 
 
-def test_results_by_target_count_unique_vulnerabilities_per_class():
-    text = build_summary(sample())
-    # CVE-1 counts once, with Trivy's severity
-    assert line(text, "| source-development") == (
-        "| source-development | source | development@0123456 | ok | 10 | "
-        "C–1&emsp;M–1&emsp;L–1 | — |"
-    )
-    assert line(text, "| app-1.0") == (
-        "| app-1.0 | image | 1.0 | ok · OSV failed: rate limited | 50 | M–1 | H–1 |"
-    )
-    assert line(text, "| **All targets**") == (
-        "| **All targets** | | | | | C–1&emsp;M–1&emsp;L–1 | H–1 |"
-    )
-    assert (
-        "C critical&emsp;H high&emsp;M medium&emsp;L low&emsp;U unknown — unique"
-        in text
-    )
 
 
-def test_a_target_that_is_not_ok_shows_its_reason_and_empty_counts():
-    row = line(build_summary(sample()), "| app-2.0")
-    assert row == "| app-2.0 | image | 2.0 | not_applicable (not published) | – |  |  |"
 
 
-def test_libraries_are_grouped_by_package_in_severity_sections():
-    text = build_summary(sample())
-    assert "## Libraries — 2 packages, 3 vulnerabilities, 2 fixable" in text
-    assert (
-        "<details open><summary><b>CRITICAL — 1 packages, 2 vulnerabilities, 2 fixable"
-        in text
-    )
-    assert (
-        "<details><summary><b>MEDIUM — 1 packages, 1 vulnerabilities, 0 fixable" in text
-    )
-    assert text.index("CRITICAL —") < text.index("MEDIUM —")
-    # the severities differ inside the row, so each vulnerability carries its letter
-    assert line(text, "| lib@1.0") == (
-        "| lib@1.0 | C [CVE-1](https://example.test/CVE-1), L [CVE-2](https://example.test/CVE-2)"
-        " | 2.0, 2.1 | top → lib · dev | web/package-lock.json | src·dev | T+O |"
-    )
-    assert line(text, "| other@1.0") == (
-        "| other@1.0 | [CVE-3](https://example.test/CVE-3) |  | direct | web/package-lock.json"
-        " | src·dev, img·1.0 | T |"
-    )
 
 
 def test_where_shows_two_locations_and_the_rest_as_a_count():
@@ -296,21 +254,8 @@ def test_where_prefers_source_lockfiles_to_image_paths():
     assert "| web/package-lock.json |" in build_summary(report(targets, findings))
 
 
-def test_os_packages_are_a_separate_table_without_chain_columns():
-    text = build_summary(sample())
-    assert (
-        "## Base image (OS packages) — 1 packages, 1 vulnerabilities, 1 fixable" in text
-    )
-    assert "| Package@version | Vulnerabilities | Fixed | Targets | Scanner |" in text
-    assert (
-        "| zlib@1.3 | [CVE-4](https://example.test/CVE-4) | 1.4 | img·1.0 | T |" in text
-    )
 
 
-def test_a_run_without_findings_has_empty_sections_and_dashes():
-    text = build_summary(report([target("s")], []))
-    assert "## Libraries — 0 packages, 0 vulnerabilities, 0 fixable" in text
-    assert "Base image" not in text and "| — | — |" in text
 
 
 def test_summary_ends_with_the_artifact_footer():
@@ -355,7 +300,7 @@ def test_findings_sharing_an_alias_are_one_vulnerability_with_the_cve_shown():
         ),
     ]
     text = build_summary(report([target(src), target(src, "osv")], findings))
-    assert "1 packages, 1 vulnerabilities, 1 fixable" in text
+    assert "1 library, 0 OS packages, 0 without a fix" in text
     assert "CVE-2026-9" in text and "GHSA-x" not in text
 
 
@@ -366,3 +311,219 @@ def test_the_cut_leaves_room_for_every_block_it_closes():
     cut = truncate_summary(text, None)
     assert len(cut.encode()) <= STEP_SUMMARY_LIMIT_BYTES
     assert cut.count("<details") == cut.count("</details>") == 5
+
+
+
+def rows_of(text, version):
+    """The package rows of a version section, in order, without the table head."""
+    section = text.split(f"\n## {version} - ")[1].split("\n## ")[0]
+    section = section.split("<details><summary>Scan details")[0]
+    rows = [r for r in section.splitlines() if r.startswith("| ") and "---" not in r]
+    return [r for r in rows if not r.startswith("| Package@version")]
+
+
+def two_versions():
+    """A source and two images of 1.2.9 (tag v1.2.9 in git, 1.2.9 in the registry),
+    the source of 1.1.15 and development; braces is in both releases."""
+    targets = [
+        target("source-development"),
+        target("source-1.2.9", ref="v1.2.9"),
+        target("source-1.1.15", ref="1.1.15"),
+        target("app-1.2.9", kind="image", ref="1.2.9"),
+        {**target("app-bff-1.2.9", kind="image", ref="1.2.9"), "image": "o/app-bff"},
+    ]
+    findings = [
+        finding("source-1.2.9", "CVE-1", "braces"),
+        finding("source-1.1.15", "CVE-1", "braces"),
+        finding("source-1.2.9", "CVE-2", "sanitize", "MEDIUM", fixed="2.0"),
+        finding("app-1.2.9", "CVE-2", "sanitize", "MEDIUM", fixed="2.0"),
+        finding("app-bff-1.2.9", "CVE-2", "sanitize", "MEDIUM", fixed="2.0"),
+        finding("source-1.1.15", "CVE-3", "other", "LOW", fixed="2.0"),
+    ]
+    return report(targets, findings)
+
+
+def test_a_git_tag_with_v_and_a_registry_tag_are_one_version():
+    assert versions_of(two_versions()) == [
+        ("development", {"source-development"}),
+        ("1.2.9", {"source-1.2.9", "app-1.2.9", "app-bff-1.2.9"}),
+        ("1.1.15", {"source-1.1.15"}),
+    ]
+
+
+def test_versions_go_development_first_then_newest_then_unparsable_by_name():
+    refs = ["1.9.0", "master", "1.10.0", "development", "1.10.0-rc.1", "v2.0.0", "abc"]
+    doc = report([target(f"s{i}", ref=r) for i, r in enumerate(refs)], [])
+    assert [v for v, _ in versions_of(doc)] == [
+        "development",
+        "2.0.0",
+        "1.10.0",
+        "1.10.0-rc.1",
+        "1.9.0",
+        "abc",
+        "master",
+    ]
+
+
+def test_a_package_of_the_source_and_the_images_of_a_version_is_one_row():
+    text = build_summary(two_versions())
+    rows = rows_of(text, "1.2.9")
+    assert len(rows) == 2
+    sanitize = next(r for r in rows if r.startswith("| sanitize@1.0"))
+    assert "| src, app, bff |" in sanitize
+    # the other release is a section of its own, with its own row of braces
+    assert "| src |" in line(text, "| braces@1.0 ")
+
+
+def test_the_top_table_counts_packages_by_their_worst_severity_not_vulnerabilities():
+    src = "source-1.0"
+    findings = [
+        finding(src, "CVE-1", "vite", "MEDIUM", fixed="2"),
+        finding(src, "CVE-2", "vite", "HIGH", fixed="2"),
+        finding(src, "CVE-3", "vite", "LOW", fixed="2"),
+    ]
+    text = build_summary(report([target(src, ref="1.0")], findings))
+    assert line(text, "| 1.0 |") == "| 1.0 | ok (source) | - | 1 | - | - | - | - |"
+    assert "## 1.0 - 1 library, 0 OS packages, 0 without a fix" in text
+
+
+def test_unique_across_versions_counts_a_package_of_two_versions_once():
+    text = build_summary(two_versions())
+    # braces (H, no fix) is in both releases; the rows add up to 2 H, the line says 1
+    assert line(text, "| 1.2.9 |").endswith("| - | 1 | 1 | - | - | 1 |")
+    assert line(text, "| 1.1.15 |").endswith("| - | 1 | - | 1 | - | 1 |")
+    assert line(text, "| **Unique across versions**") == (
+        "| **Unique across versions** |  | - | 1 | 1 | 1 | - | 1 |"
+    )
+    assert "do not add up to this line" in text
+
+
+def test_a_package_is_without_a_fix_when_none_of_its_vulnerabilities_has_one():
+    src = "source-1.0"
+    findings = [
+        finding(src, "CVE-1", "none"),
+        finding(src, "CVE-2", "mixed"),
+        finding(src, "CVE-3", "mixed", fixed="3.1"),
+        finding(src, "CVE-4", "mixed", fixed="3.0"),
+    ]
+    text = build_summary(report([target(src, ref="1.0")], findings))
+    assert "| none@1.0 | H | no fix |" in text
+    # a mixed package is fixable: it shows the versions that fix its vulnerabilities
+    assert "| mixed@1.0 | H | 3.1, 3.0 |" in text
+    assert "2 libraries, 0 OS packages, 1 without a fix" in text
+
+
+def test_rows_go_fixable_then_dev_then_without_a_fix_by_severity_then_name():
+    src = "source-1.0"
+    dev = {"dev": True}
+    findings = [
+        finding(src, "C1", "z-nofix-crit", "CRITICAL"),
+        finding(src, "C2", "a-nofix-low", "LOW"),
+        finding(src, "C3", "dev-nofix", "CRITICAL", **dev),
+        finding(src, "C4", "dev-fix-high", "HIGH", fixed="2", **dev),
+        finding(src, "C5", "dev-fix-crit", "CRITICAL", fixed="2", **dev),
+        finding(src, "C6", "fix-med", "MEDIUM", fixed="2"),
+        finding(src, "C7", "fix-high-b", "HIGH", fixed="2"),
+        finding(src, "C8", "fix-high-a", "HIGH", fixed="2"),
+    ]
+    text = build_summary(report([target(src, ref="1.0")], findings))
+    names = [r.split("@")[0].removeprefix("| ") for r in rows_of(text, "1.0")]
+    assert names == [
+        "fix-high-a",
+        "fix-high-b",
+        "fix-med",
+        "dev-fix-crit",
+        "dev-fix-high",
+        "z-nofix-crit",
+        "a-nofix-low",
+        "dev-nofix",
+    ]
+    assert "| dev-fix-crit@1.0 `dev` | C |" in text
+    assert "`dev`" not in line(text, "| fix-med@")
+
+
+def test_a_failed_image_without_a_tag_is_in_no_version():
+    failed = target("app-release", kind="image", ref=None, status="failed")
+    doc = report([target("source-1.0", ref="1.0"), failed], [])
+    assert [v for v, _ in versions_of(doc)] == ["1.0"]
+    assert "None" not in build_summary(doc)
+
+
+def test_a_run_without_findings_has_a_table_of_dashes_and_no_sections():
+    text = build_summary(report([target("s")], []))
+    assert line(text, "| development |") == (
+        "| development | ok (source) | - | - | - | - | - | - |"
+    )
+    assert line(text, "| **Unique") == (
+        "| **Unique across versions** |  | - | - | - | - | - | - |"
+    )
+    assert "\n## development - " not in text
+
+
+def test_the_scan_column_says_what_was_scanned_and_what_failed():
+    text = build_summary(sample())
+    assert line(text, "| 1.0 |").startswith("| 1.0 | failed (1 image, 1 OSV failed) |")
+    assert line(text, "| 2.0 |").startswith("| 2.0 | ok (1 n/a) |")
+
+
+def test_the_per_target_table_is_collapsed_and_has_no_counts():
+    text = build_summary(sample())
+    assert "<details><summary>Scan details by target</summary>" in text
+    assert "| Target | Type | Version | Scan | Packages scanned |" in text
+    assert line(text, "| app-1.0 |") == (
+        "| app-1.0 | image | 1.0 | ok · OSV failed: rate limited | 50 |"
+    )
+    assert line(text, "| app-2.0 |") == (
+        "| app-2.0 | image | 2.0 | not_applicable (not published) | – |"
+    )
+
+
+def test_a_version_section_has_its_tables_under_the_heading_not_collapsed():
+    text = build_summary(sample())
+    release = text.split("\n## 1.0 - ")[1].split("\n## ")[0]
+    assert "### Libraries\n\n| Package@version" in release
+    assert "### Base image (OS packages)\n\n| Package@version" in release
+    assert "<details" not in text.split("<details><summary>Scan details")[0]
+
+
+def test_the_vulnerabilities_table_counts_vulnerabilities_by_their_own_severity():
+    src = "source-1.0"
+    findings = [
+        finding(src, "CVE-1", "vite", "MEDIUM", fixed="2"),
+        finding(src, "CVE-2", "vite", "HIGH"),
+        finding(src, "CVE-3", "vite", "LOW", fixed="2"),
+        # one vulnerability under two ids, seen by both scanners
+        finding(src, "GHSA-x", "lib", "LOW", scanner="osv", aliases=["CVE-4"]),
+        finding(src, "CVE-4", "lib", "LOW"),
+    ]
+    text = build_summary(report([target(src, ref="1.0")], findings))
+    table = text.split("## Vulnerabilities by version")[1].split("\n## ")[0]
+    assert "| Version | C | H | M | L | No fix |" in table
+    assert "| 1.0 | - | 1 | 1 | 2 | 2 |" in table
+    assert "| **Unique across versions** | - | 1 | 1 | 2 | 2 |" in table
+
+
+def test_the_vulnerabilities_unique_row_counts_a_vulnerability_of_two_versions_once():
+    text = build_summary(two_versions())
+    table = text.split("## Vulnerabilities by version")[1].split("\n## ")[0]
+    assert "| 1.2.9 | - | 1 | 1 | - | 1 |" in table
+    assert "| 1.1.15 | - | 1 | - | 1 | 1 |" in table
+    assert "| **Unique across versions** | - | 1 | 1 | 1 | 1 |" in table
+    assert "counted once in the last row" in table
+
+
+def test_unique_counts_the_os_package_of_each_installed_version():
+    # one OS row per package inside a version (the scanners spell a version
+    # differently), but zlib of two versions are two installed packages
+    targets = [
+        target("app-2.0", kind="image", ref="2.0"),
+        target("app-1.0", kind="image", ref="1.0"),
+    ]
+    findings = [
+        finding("app-2.0", "CVE-1", "zlib", cls="os", fixed="1.4", version="1.3"),
+        finding("app-1.0", "CVE-2", "zlib", cls="os", version="1.2"),
+    ]
+    text = build_summary(report(targets, findings))
+    assert line(text, "| 2.0 |").endswith("| 1 | - |")
+    assert line(text, "| 1.0 |").endswith("| 1 | 1 |")
+    assert line(text, "| **Unique").endswith("| 2 | 1 |")
