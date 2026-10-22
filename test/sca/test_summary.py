@@ -58,7 +58,7 @@ def finding(
 
 def report(targets, findings):
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "repo": "o/app",
         "commit_sha": "0123456789abcdef",
         "default_branch": "development",

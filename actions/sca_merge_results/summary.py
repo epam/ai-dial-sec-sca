@@ -207,6 +207,47 @@ def totals(rows: Sequence[Mapping[str, Any]]) -> str:
     return f"{len(rows)} packages, {len(vulns)} vulnerabilities, {fixable} fixable"
 
 
+def severity_block(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Counts of the vulnerabilities of package rows: per severity and overall,
+    ``all`` and ``fixable`` (a fixed version is known, as in ``totals``).
+    """
+    by = {s: {"all": 0, "fixable": 0} for s in SEVERITIES}
+    for v in (v for r in rows for v in r["vulns"]):
+        by[v["severity"]]["all"] += 1
+        by[v["severity"]]["fixable"] += bool(v["fixed"])
+    return {
+        "all": sum(b["all"] for b in by.values()),
+        "fixable": sum(b["fixable"] for b in by.values()),
+        "by_severity": by,
+    }
+
+
+def build_counts(report: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``counts`` block of report.json, from the same rows the summary lists.
+
+    ``total`` counts the unique vulnerabilities of the repository (a finding present
+    in several targets counts once); ``targets`` counts them per target id, so the
+    targets do not sum to the total. A target that is not ``ok`` has its status only.
+    The status of a target is its Trivy scan's, as in the summary.
+    """
+    findings = report["findings"]
+    source_ids = {t["id"] for t in report["targets"] if t["kind"] == "fs"}
+    targets: dict[str, Any] = {}
+    for t in sorted(report["targets"], key=lambda t: t["scanner"] != "trivy"):
+        targets.setdefault(t["id"], t)
+    result: dict[str, Any] = {}
+    for tid, t in targets.items():
+        if t["status"] == "ok":
+            rows = package_rows([f for f in findings if f["target"] == tid], source_ids)
+            result[tid] = {"status": "ok", **severity_block(rows)}
+        else:
+            result[tid] = {"status": t["status"]}
+    return {
+        "total": severity_block(package_rows(findings, source_ids)),
+        "targets": result,
+    }
+
+
 def scan_status(trivy: Mapping[str, Any], osv: Mapping[str, Any] | None) -> str:
     text = trivy["status"] + (f" ({trivy['reason']})" if trivy["reason"] else "")
     if trivy["status"] == "ok" and osv:
