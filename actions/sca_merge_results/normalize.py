@@ -2,10 +2,11 @@
 
 A finding is one row per (target, scanner, class, id, package, version); the copies
 of a finding in several lockfiles of one target are one row with several
-``locations``. The ``id`` is the CVE if the id or an alias is one, so that the rows
-of both scanners about one vulnerability share it. Severity and fixed version are the
-scanner's own. The package of an OSV finding is looked up in the Trivy inventory of
-the same target, which gives the finding its chain, dev flag and locations.
+``locations``. The ``id`` is the scanner's own: Trivy's ``VulnerabilityID``, the CVE
+(or the lowest id) of an OSV group; ``names`` are the other names of the same
+vulnerability. Severity and fixed version are the scanner's own. The package of an
+OSV finding is looked up in the Trivy inventory of the same target, which gives the
+finding its chain, dev flag and locations.
 """
 
 from __future__ import annotations
@@ -181,8 +182,7 @@ def normalize_trivy(
                 if location not in entry["locations"]:
                     entry["locations"].append(location)
         for vuln in result.get("Vulnerabilities") or []:
-            ids = [vuln["VulnerabilityID"], *(vuln.get("VendorIDs") or [])]
-            vid = pick_id(ids)
+            vid = vuln["VulnerabilityID"]
             name, version = vuln["PkgName"], vuln["InstalledVersion"]
             graph = no_graph()
             if lang:
@@ -194,7 +194,9 @@ def normalize_trivy(
                     "target": tid,
                     "scanner": "trivy",
                     "id": vid,
-                    "aliases": [i for i in ids if i != vid],
+                    "aliases": [i for i in vuln.get("VendorIDs") or [] if i != vid],
+                    "names": [vid],
+                    "published": (vuln.get("PublishedDate") or "")[:10] or None,
                     "pkg": name,
                     "version": version,
                     "ecosystem": result["Type"],
@@ -228,17 +230,64 @@ def severity_of_score(score: Any) -> str:
     return "UNKNOWN"
 
 
+NAME_PREFIXES = ("CVE-", "GHSA-", "PYSEC-", "GO-", "RUSTSEC-")
+OWN_CVE = re.compile(r"(?:[A-Z]+-)?(CVE-\d+-\d+)")
+
+
+def names_of(vid: str, ids: Sequence[str]) -> list[str]:
+    """The id first, then the other names of the vulnerability (the CVE, GHSA,
+    PYSEC, GO and RUSTSEC ids among ``ids``) in string order."""
+    return [vid, *sorted({i for i in ids if i.startswith(NAME_PREFIXES)} - {vid})]
+
+
+def earliest(records: Sequence[Mapping[str, Any]]) -> str | None:
+    """The first ``published`` date (``YYYY-MM-DD``) of the records, if any."""
+    dates = [r["published"][:10] for r in records if r.get("published")]
+    return min(dates, default=None)
+
+
+def ubuntu_priority(record: Mapping[str, Any]) -> str:
+    """The Ubuntu priority of an OSV record as a severity (negligible is LOW),
+    ``UNKNOWN`` without one."""
+    for rating in record.get("severity") or []:
+        if rating.get("type") == "Ubuntu":
+            score = str(rating.get("score")).upper().replace("NEGLIGIBLE", "LOW")
+            return score if score in SEVERITIES else "UNKNOWN"
+    return "UNKNOWN"
+
+
+def fixed_of(records: Sequence[Mapping[str, Any]], name: str) -> str:
+    """The fixes of every branch of the records for the package ``name``: ECOSYSTEM
+    and SEMVER ranges (GIT ranges hold commits)."""
+    return ", ".join(
+        dict.fromkeys(
+            event["fixed"]
+            for v in records
+            for affected in v.get("affected", [])
+            if affected.get("package", {}).get("name") == name
+            for rng in affected.get("ranges", [])
+            if rng.get("type") in ("ECOSYSTEM", "SEMVER")
+            for event in rng.get("events", [])
+            if "fixed" in event
+        )
+    )
+
+
 def normalize_osv(
     tid: str, native: Mapping[str, Any], findings: Findings, inventory: Inventory
 ) -> None:
-    """One finding per osv-scanner group of a package. Severity is the rating the
-    database gives (GHSA), else the bucket of the group's CVSS score.
+    """Findings of the osv-scanner groups of a package. A group of ``lang`` is one
+    finding: severity is the rating the database gives (GHSA), else the bucket of
+    the group's CVSS score. A group of ``os`` is one finding per own CVE (an id
+    ``CVE-Y-N`` or ``<PREFIX>-CVE-Y-N``) with the fields of that CVE's record only:
+    the Ubuntu priority as severity (``UNKNOWN`` without one), never the bundle's
+    CVSS or CVEs. A group of bulletins only (``USN-*``) is one ``UNKNOWN`` finding.
 
     The results of the BOM query and of a direct image scan are one list, so the
     class is derived per result entry: a result of an OS source holds OS packages.
     An OS package is reported under its installed name (``os_package_name``, what
     Trivy reports as ``Name`` too, so the rows line up) while OSV keys the record -
-    and the ``fixed`` filter below - by the source name.
+    and the ``fixed`` filter - by the source name.
     """
     for result in native["results"]:
         cls = "os" if result["source"]["type"] == "os" else "lang"
@@ -248,57 +297,80 @@ def normalize_osv(
             name, version = package["name"], package["version"]
             pkg = package.get("os_package_name") or name
             own = inventory.get((norm(pkg), version), {**no_graph(), "locations": []})
+            by_cve: dict[str, Mapping[str, Any]] = {}  # CVE -> its record
+            for v in sorted(
+                vulns.values(), key=lambda v: (ubuntu_priority(v) == "UNKNOWN", v["id"])
+            ):
+                if cls == "os" and (m := OWN_CVE.fullmatch(v["id"])):
+                    by_cve.setdefault(m[1], v)
             for group in entry.get("groups", []):
-                members = [vulns[i] for i in group["ids"] if i in vulns]
-                ids = list(dict.fromkeys(group["ids"] + group.get("aliases", [])))
-                vid = pick_id(ids)
-                rating = next(
-                    (
-                        v["database_specific"]["severity"]
-                        for v in members
-                        if (v.get("database_specific") or {}).get("severity")
-                    ),
-                    None,
-                )
-                rating = {"MODERATE": "MEDIUM"}.get(rating, rating)
-                # fixes of every branch (ECOSYSTEM/SEMVER ranges; GIT ranges hold commits)
-                fixed = ", ".join(
-                    dict.fromkeys(
-                        event["fixed"]
-                        for v in members
-                        for affected in v.get("affected", [])
-                        if affected.get("package", {}).get("name") == name
-                        for rng in affected.get("ranges", [])
-                        if rng.get("type") in ("ECOSYSTEM", "SEMVER")
-                        for event in rng.get("events", [])
-                        if "fixed" in event
+                gids = group["ids"]
+                members = [vulns[i] for i in gids if i in vulns]
+                ids = list(dict.fromkeys(gids + group.get("aliases", [])))
+                cves: dict[str, str] = {}  # own CVE -> the group id it comes from
+                for i in gids if cls == "os" else []:
+                    if m := OWN_CVE.fullmatch(i):
+                        cves.setdefault(m[1], i)
+                # (id, aliases, names, severity, records, id of the url)
+                parts = []
+                for cve, gid in sorted(cves.items()):
+                    rec = by_cve.get(cve) or {"id": gid}
+                    aliases = rec.get("aliases", [])
+                    parts.append(
+                        (
+                            cve,
+                            [rec["id"], *aliases],
+                            names_of(cve, aliases),
+                            ubuntu_priority(rec),
+                            [rec],
+                            rec["id"],
+                        )
                     )
-                )
-                first = members[0] if members else {}
-                add_finding(
-                    findings,
-                    {
-                        "target": tid,
-                        "scanner": "osv",
-                        "id": vid,
-                        "aliases": [i for i in ids if i != vid],
-                        "pkg": pkg,
-                        "version": version,
-                        "ecosystem": package["ecosystem"],
-                        "class": cls,
-                        "locations": list(own["locations"]),
-                        "severity": rating
-                        if rating in SEVERITIES
-                        else severity_of_score(group.get("max_severity")),
-                        "fixed_version": fixed,
-                        "dev": own["dev"],
-                        "relationship": own["relationship"],
-                        "chain": own["chain"],
-                        "title": first.get("summary")
-                        or next(iter((first.get("details") or "").splitlines()), ""),
-                        "url": OSV_URL + group["ids"][0],
-                    },
-                )
+                if cls == "os" and not cves:
+                    vid = min(gids)
+                    parts.append((vid, ids, [vid], "UNKNOWN", members, gids[0]))
+                elif cls == "lang":
+                    vid = pick_id(ids)
+                    rating = next(
+                        (
+                            v["database_specific"]["severity"]
+                            for v in members
+                            if (v.get("database_specific") or {}).get("severity")
+                        ),
+                        None,
+                    )
+                    rating = {"MODERATE": "MEDIUM"}.get(rating, rating)
+                    if rating not in SEVERITIES:
+                        rating = severity_of_score(group.get("max_severity"))
+                    parts.append(
+                        (vid, ids, names_of(vid, ids), rating, members, gids[0])
+                    )
+                for vid, aliases, names, severity, records, url_id in parts:
+                    first = records[0] if records else {}
+                    details = (first.get("details") or "").splitlines()
+                    add_finding(
+                        findings,
+                        {
+                            "target": tid,
+                            "scanner": "osv",
+                            "id": vid,
+                            "aliases": [i for i in aliases if i != vid],
+                            "names": names,
+                            "published": earliest(records),
+                            "pkg": pkg,
+                            "version": version,
+                            "ecosystem": package["ecosystem"],
+                            "class": cls,
+                            "locations": list(own["locations"]),
+                            "severity": severity,
+                            "fixed_version": fixed_of(records, name),
+                            "dev": own["dev"],
+                            "relationship": own["relationship"],
+                            "chain": own["chain"],
+                            "title": first.get("summary") or next(iter(details), ""),
+                            "url": OSV_URL + url_id,
+                        },
+                    )
 
 
 def borrow_source_chains(
