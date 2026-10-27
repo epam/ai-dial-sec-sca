@@ -6,7 +6,9 @@ Inputs:
     target with the same id);
   * a parts directory with one subdirectory per scanner (``trivy/``, ``osv/``)
     holding, per scanned target id, ``<id>.json`` (native JSON),
-    ``<id>.status.json``, an optional ``<id>.txt`` (table) and, for a Trivy Gradle
+    ``<id>.status.json``, an optional ``<id>.txt`` (table), for a Trivy fs target the
+    repository ``.trivyignore`` as ``<id>.trivyignore`` (``ignorefile`` of its
+    status file says whether it exists) and, for a Trivy Gradle
     build, ``<id>.gradle-graph/`` (the resolved dependency graph, one JSON file per
     Gradle project, written by the generate_gradle_lockfiles action).
 
@@ -16,7 +18,8 @@ Outputs (in the output directory):
     (see ``vulns``);
   * ``summary.md`` - the human-readable layer (see ``summary``), also appended to the
     job summary;
-  * ``_native/<scanner>/<id>.json|txt`` - the unmodified per-target results (audit).
+  * ``_native/<scanner>/<id>.json|txt|trivyignore`` - the unmodified per-target
+    results (audit).
 
 A scan that broke is reported as ``failed`` and never looks like a clean target. The
 script still exits 0 once the outputs are written: the workflow decides about
@@ -35,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from _sca_lib import append_text, dump_json, escape_command_data, format_time, read_json
+from ignores import add_ignores
 from normalize import (
     Findings,
     Inventory,
@@ -139,7 +143,7 @@ def run_merge(
         parts = parts_dir / scanner
         native_dir = output_dir / "_native" / scanner
         native_dir.mkdir(parents=True, exist_ok=True)
-        for suffix in (".json", ".txt"):
+        for suffix in (".json", ".txt", ".trivyignore"):
             if (parts / f"{tid}{suffix}").is_file():
                 shutil.copyfile(parts / f"{tid}{suffix}", native_dir / f"{tid}{suffix}")
         state, native, status = load_target_result(target, parts)
@@ -240,6 +244,7 @@ def run_merge(
         "findings": list(findings.values()),
     }
     report["versions"] = build_versions(report)
+    add_ignores(report, parts_dir)
     rows = build_rows(report)
     dump_json(output_dir / "report.json", report)
     summary = build_summary(report, rows)

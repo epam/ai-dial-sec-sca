@@ -347,7 +347,9 @@ def test_report_header_has_engine_and_run_attempt_and_versions_replace_counts(tm
     assert list(report)[:2] == ["schema_version", "engine"]
     assert list(report).index("run_attempt") == list(report).index("run_id") + 1
     assert report["engine"] == "v0.7.0" and report["run_attempt"] == 2
-    assert "counts" not in report and list(report)[-2:] == ["findings", "versions"]
+    assert "counts" not in report
+    tail = ["findings", "versions", "ignores", "ignores_error"]
+    assert list(report)[-4:] == tail
     (version,) = report["versions"]
     assert version["counts"]["h"] == 1 and version["vulns"][0]["id"] == "CVE-2026-1"
 
