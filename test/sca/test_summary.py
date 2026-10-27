@@ -5,8 +5,9 @@ import re
 import pytest
 from summary import (
     STEP_SUMMARY_LIMIT_BYTES,
-    build_counts,
+    build_rows,
     build_summary,
+    severity_block,
     target_label,
     truncate_summary,
     versions_of,
@@ -44,6 +45,8 @@ def finding(
         "scanner": scanner,
         "id": vid,
         "aliases": [],
+        "names": [vid],
+        "published": None,
         "pkg": pkg,
         "version": "1.3" if cls == "os" else "1.0",
         "ecosystem": "npm",
@@ -62,7 +65,7 @@ def finding(
 
 def report(targets, findings):
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "repo": "o/app",
         "commit_sha": "0123456789abcdef",
         "default_branch": "development",
@@ -574,10 +577,9 @@ def test_a_vulnerability_of_an_os_package_in_two_versions_is_one():
     assert vulns_line(text, "**All (unique)**").endswith("| - | 2 | - | - | 1 |")
 
 
-def test_the_last_row_of_the_vulnerabilities_table_is_counts_total_of_report_json():
+def test_the_last_row_of_the_vulnerabilities_table_is_the_total_of_all_rows():
     doc = two_versions()
-    doc["counts"] = build_counts(doc)
-    total = doc["counts"]["total"]
+    total = severity_block(build_rows(doc).all_rows)
     row = vulns_line(build_summary(doc), "**All (unique)**").strip("|").split("|")[1:]
     shown = [c.strip() for c in row]
     by = total["by_severity"]

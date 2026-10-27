@@ -11,8 +11,9 @@ Inputs:
     Gradle project, written by the generate_gradle_lockfiles action).
 
 Outputs (in the output directory):
-  * ``report.json`` - the targets with their status and the flat list of findings
-    (see ``normalize`` for the rows);
+  * ``report.json`` - the targets with their status, the flat list of findings (see
+    ``normalize`` for the rows) and the versions with their vulnerability records
+    (see ``vulns``);
   * ``summary.md`` - the human-readable layer (see ``summary``), also appended to the
     job summary;
   * ``_native/<scanner>/<id>.json|txt`` - the unmodified per-target results (audit).
@@ -42,9 +43,21 @@ from normalize import (
     normalize_osv,
     normalize_trivy,
 )
-from summary import build_counts, build_rows, build_summary, truncate_summary
+from summary import build_rows, build_summary, truncate_summary
+from vulns import build_versions
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+
+def engine_ref(action_path: str | None) -> str | None:
+    """The ref of the action in a runner path ``.../_actions/<owner>/<repo>/<ref>/
+    actions/<action>`` (a branch ref with a slash is nested directories); None
+    outside Actions (a local run).
+    """
+    parts = (action_path or "").replace("\\", "/").split("/")
+    if "_actions" not in parts:
+        return None
+    return "/".join(parts[parts.index("_actions") + 3 : -2]) or None
 
 
 def load_target_result(
@@ -114,6 +127,8 @@ def run_merge(
     output_dir: Path,
     generated_utc: str,
     trivy_db: Mapping[str, str],
+    engine: str | None = None,
+    run_attempt: int | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Write all outputs; return the report and the summary."""
     doc = read_json(targets_file)
@@ -203,10 +218,12 @@ def run_merge(
 
     report = {
         "schema_version": SCHEMA_VERSION,
+        "engine": engine,
         "repo": doc["repo"],
         "commit_sha": doc["commit_sha"],
         "default_branch": doc["default_branch"],
         "run_id": doc["run_id"],
+        "run_attempt": run_attempt,
         "run_url": doc["run_url"],
         "generated_utc": generated_utc,
         # event and actor are every-run fields, scan_ref and forced_image_scan are
@@ -222,8 +239,8 @@ def run_merge(
         "targets": entries,
         "findings": list(findings.values()),
     }
+    report["versions"] = build_versions(report)
     rows = build_rows(report)
-    report["counts"] = build_counts(report, rows)
     dump_json(output_dir / "report.json", report)
     summary = build_summary(report, rows)
     (output_dir / "summary.md").write_text(summary, encoding="utf-8", newline="\n")
@@ -248,12 +265,16 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     trivy_db = json.loads(args.trivy_db_info) if args.trivy_db_info.strip() else {}
+    action_path = os.environ.get("ACTION_PATH")
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
     report, summary = run_merge(
         args.targets_file,
         args.parts_dir,
         args.output_dir,
         format_time(datetime.now(UTC)),
         trivy_db,
+        engine_ref(action_path),
+        int(attempt) if attempt.isdigit() else None,
     )
     failed = [e for e in report["targets"] if e["status"] == "failed"]
     for entry in failed:

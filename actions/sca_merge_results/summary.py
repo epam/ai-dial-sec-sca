@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from normalize import SEVERITIES, norm
+from vulns import versions_of
 
 # GitHub rejects a step summary over 1 MiB; the rest of the limit is left for the
 # parts of the job summary that are not this one
@@ -230,107 +230,6 @@ def severity_block(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def build_counts(report: Mapping[str, Any], rows: Rows | None = None) -> dict[str, Any]:
-    """The ``counts`` block of report.json, from the same rows the summary lists.
-
-    ``total`` counts the unique vulnerabilities of the repository (a finding present
-    in several targets counts once); ``targets`` counts them per target id, so the
-    targets do not sum to the total. A target that is not ``ok`` has its status only.
-    The status of a target is its Trivy scan's, as in the summary.
-    """
-    if rows is None:
-        rows = build_rows(report)
-    findings = report["findings"]
-    source_ids = rows.source_ids
-    targets: dict[str, Any] = {}
-    for t in sorted(report["targets"], key=lambda t: t["scanner"] != "trivy"):
-        targets.setdefault(t["id"], t)
-    result: dict[str, Any] = {}
-    for tid, t in targets.items():
-        if t["status"] == "ok":
-            t_rows = package_rows(
-                [f for f in findings if f["target"] == tid], source_ids
-            )
-            result[tid] = {"status": "ok", **severity_block(t_rows)}
-        else:
-            result[tid] = {"status": t["status"]}
-    return {
-        "total": severity_block(rows.all_rows),
-        "targets": result,
-        "versions": version_counts(report, rows),
-    }
-
-
-def version_counts(report: Mapping[str, Any], rows: Rows) -> list[dict[str, Any]]:
-    """One flat record per version of ``rows.by_version``, in that order: kind, whether
-    it is the latest release, scan status, and the severity counts of its unique
-    vulnerabilities. A version with any non-ok target is ``failed`` with zero counts.
-    ``latest`` marks the newest ``ok`` release, or no record if there is none.
-    """
-    default_branch = report["default_branch"]
-    by_id = {t["id"]: t for t in report["targets"]}
-    records = []
-    for ref, ids in rows.by_version:
-        failed = any(by_id[tid]["status"] != "ok" for tid in ids)
-        record: dict[str, Any] = {
-            "ref": ref,
-            "kind": version_kind(ref, default_branch),
-            "latest": False,  # resolved below, once every status is known
-            "status": "failed" if failed else "ok",
-            "c": 0,
-            "h": 0,
-            "m": 0,
-            "l": 0,
-            "unknown": 0,
-            "all": 0,
-            "fixable": 0,
-        }
-        if not failed:
-            record.update(flat_counts(severity_block(rows.version_rows[ref])))
-        records.append(record)
-    for record in records:
-        if record["status"] == "ok" and is_release(record["ref"], default_branch):
-            record["latest"] = True
-            break
-    return records
-
-
-def is_release(ref: str, default_branch: str | None) -> bool:
-    """A plain semver tag: not the default branch, not ``development``, not a
-    pre-release, and not a ref that does not parse as semver.
-    """
-    if ref == default_branch or ref == "development":
-        return False
-    m = VERSION.fullmatch(ref)
-    return m is not None and m[2] is None
-
-
-def version_kind(ref: str, default_branch: str | None) -> str:
-    """``development`` for the default branch or ``development``; ``candidate`` for a
-    semver with a pre-release part (``0.50.0-rc.1``); ``release`` otherwise.
-    """
-    if ref == default_branch or ref == "development":
-        return "development"
-    m = VERSION.fullmatch(ref)
-    if m and m[2] is not None:
-        return "candidate"
-    return "release"
-
-
-def flat_counts(block: Mapping[str, Any]) -> dict[str, Any]:
-    """The severity counts of a ``severity_block`` as a flat dict with short keys."""
-    by = block["by_severity"]
-    return {
-        "c": by["CRITICAL"]["all"],
-        "h": by["HIGH"]["all"],
-        "m": by["MEDIUM"]["all"],
-        "l": by["LOW"]["all"],
-        "unknown": by["UNKNOWN"]["all"],
-        "all": block["all"],
-        "fixable": block["fixable"],
-    }
-
-
 def scan_status(trivy: Mapping[str, Any], osv: Mapping[str, Any] | None) -> str:
     text = trivy["status"] + (f" ({trivy['reason']})" if trivy["reason"] else "")
     if trivy["status"] == "ok" and osv:
@@ -378,35 +277,9 @@ def one_off_lines(report: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-VERSION = re.compile(r"(\d+(?:\.\d+)*)(-.+)?")
-
-
-def version_order(version: str) -> tuple[int, Any]:
-    """development first, then releases from the newest (a release candidate after
-    its final version), then whatever is not a version, alphabetically.
-    """
-    if version == "development":
-        return 0, ()
-    if m := VERSION.fullmatch(version):
-        return 1, (tuple(-int(n) for n in m[1].split(".")), m[2] is not None, m[2])
-    return 2, version
-
-
-def versions_of(report: Mapping[str, Any]) -> list[tuple[str, set[str]]]:
-    """(version, ids of its targets) in display order. The source and the images of
-    one version agree on it: a git tag may carry a ``v`` that a registry tag lacks.
-    A target without a ref (its resolution failed) belongs to no version.
-    """
-    ids: dict[str, set[str]] = {}
-    for t in report["targets"]:
-        if t["ref"]:
-            ids.setdefault(t["ref"].removeprefix("v"), set()).add(t["id"])
-    return sorted(ids.items(), key=lambda item: version_order(item[0]))
-
-
 @dataclass(frozen=True)
 class Rows:
-    """Common row context built once per report and shared by counts and summary."""
+    """Common row context built once per report and shared by the summary."""
 
     source_ids: set[str]
     by_version: list[tuple[str, set[str]]]
@@ -415,7 +288,7 @@ class Rows:
 
 
 def build_rows(report: Mapping[str, Any]) -> Rows:
-    """Build the package rows used by both ``build_counts`` and ``build_summary``.
+    """Build the package rows used by ``build_summary``.
 
     ``package_rows`` is the most expensive pass over findings; this gathers every
     rows context the report needs in a single traversal set.
@@ -489,9 +362,7 @@ def vulnerabilities_table(
     version_rows: Mapping[str, Sequence[Mapping[str, Any]]],
     all_rows: Sequence[Mapping[str, Any]],
 ) -> list[str]:
-    """Unique vulnerabilities per version and over all; the last row is what
-    ``counts.total`` of report.json holds (the same function over the same rows).
-    """
+    """Unique vulnerabilities per version and over all (the last row)."""
     blocks = [(v, severity_block(version_rows[v])) for v, _ in by_version]
     total = severity_block(all_rows)
     severities = severity_columns(

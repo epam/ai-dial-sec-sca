@@ -125,7 +125,7 @@ def test_report_has_targets_tools_and_one_finding_per_scanner_and_vulnerability(
     }
     run.part("osv", "source-development", osv_native(), osv_status)
     failed, report = run.merge()
-    assert failed == 0 and report["schema_version"] == 3
+    assert failed == 0 and report["schema_version"] == 4
     assert report["tools"] == {
         "trivy": "0.75.0",
         "trivy_db": DB["vulnerability_db_updated_at"],
@@ -335,3 +335,59 @@ def test_a_forced_image_scan_reaches_the_report(tmp_path):
     report = run.merge()[1]
     assert report["forced_image_scan"] is True
     assert "scan_ref" not in report
+
+
+def test_report_header_has_engine_and_run_attempt_and_versions_replace_counts(tmp_path):
+    run = Run(tmp_path, [target("source-development", "trivy")])
+    run.part("trivy", "source-development", trivy_native([VULN]), {"status": "ok"})
+    run_merge(
+        run.targets_file, run.parts, run.out, "2026-10-14T00:00:00Z", DB, "v0.7.0", 2
+    )
+    report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
+    assert list(report)[:2] == ["schema_version", "engine"]
+    assert list(report).index("run_attempt") == list(report).index("run_id") + 1
+    assert report["engine"] == "v0.7.0" and report["run_attempt"] == 2
+    assert "counts" not in report and list(report)[-2:] == ["findings", "versions"]
+    (version,) = report["versions"]
+    assert version["counts"]["h"] == 1 and version["vulns"][0]["id"] == "CVE-2026-1"
+
+
+def test_main_reads_engine_and_run_attempt_from_the_environment(tmp_path, monkeypatch):
+    run = Run(tmp_path, [target("s", "trivy")])
+    path = "/r/_actions/epam/ai-dial-sec-sca/v0.7.0/actions/sca_merge_results"
+    monkeypatch.setenv("ACTION_PATH", path)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "3")
+    main(
+        [
+            "--targets-file",
+            str(run.targets_file),
+            "--parts-dir",
+            str(run.parts),
+            "--output-dir",
+            str(run.out),
+        ]
+    )
+    report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
+    assert (report["engine"], report["run_attempt"]) == ("v0.7.0", 3)
+
+
+@pytest.mark.parametrize("value", [None, "x"])
+def test_main_run_attempt_is_null_when_missing_or_not_a_number(
+    tmp_path, monkeypatch, value
+):
+    run = Run(tmp_path, [target("s", "trivy")])
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
+    if value:
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", value)
+    main(
+        [
+            "--targets-file",
+            str(run.targets_file),
+            "--parts-dir",
+            str(run.parts),
+            "--output-dir",
+            str(run.out),
+        ]
+    )
+    report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
+    assert report["run_attempt"] is None
