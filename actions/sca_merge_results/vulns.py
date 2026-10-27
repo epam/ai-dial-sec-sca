@@ -15,6 +15,7 @@ from normalize import SEVERITIES, norm
 
 Finding = Mapping[str, Any]
 
+COUNT_KEYS = dict(zip(SEVERITIES, ("c", "h", "m", "l", "unknown")))
 VERSION = re.compile(r"(\d+(?:\.\d+)*)(-.+)?")
 
 
@@ -113,9 +114,8 @@ def record_of(fs: Sequence[Finding], source_ids: set[str]) -> dict[str, Any]:
 
 def counts_of(vulns: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     """Severity counts, ``all`` and ``fixable`` of the records."""
-    by = [sum(v["severity"] == s for v in vulns) for s in SEVERITIES]
     return {
-        **dict(zip(("c", "h", "m", "l", "unknown"), by)),
+        **{k: sum(v["severity"] == s for v in vulns) for s, k in COUNT_KEYS.items()},
         "all": len(vulns),
         "fixable": sum(bool(v["fixed"]) for v in vulns),
     }

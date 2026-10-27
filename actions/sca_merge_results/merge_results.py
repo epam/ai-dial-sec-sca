@@ -47,7 +47,7 @@ from normalize import (
     normalize_osv,
     normalize_trivy,
 )
-from summary import build_rows, build_summary, truncate_summary
+from summary import build_summary, truncate_summary
 from vulns import build_versions
 
 SCHEMA_VERSION = 4
@@ -245,9 +245,8 @@ def run_merge(
     }
     report["versions"] = build_versions(report)
     add_ignores(report, parts_dir)
-    rows = build_rows(report)
     dump_json(output_dir / "report.json", report)
-    summary = build_summary(report, rows)
+    summary = build_summary(report)
     (output_dir / "summary.md").write_text(summary, encoding="utf-8", newline="\n")
     return report, summary
 
