@@ -45,7 +45,7 @@ The tests need Python 3.12 and no network access. They run in GitHub Actions on 
 
 `sca_merge_results` writes `report.json` (`schema_version` 4):
 
-- the header: `engine` (the action ref the runner used: a tag, a branch or a commit SHA; `null` outside GitHub Actions), `repo`, `commit_sha`, `default_branch`, `run_id`, `run_attempt`, `run_url`, `generated_utc`, `event`, `actor`, and, when set, `scan_ref` and `forced_image_scan`;
+- the header: `engine` (the ref of `sca_merge_results` as the runner resolved it: a tag, a branch or a commit SHA; `null` outside GitHub Actions), `repo`, `commit_sha`, `default_branch`, `run_id`, `run_attempt`, `run_url`, `generated_utc`, `event`, `actor`, and, when set, `scan_ref` and `forced_image_scan`;
 - `tools`: the versions of Trivy and osv-scanner, the Trivy DBs and the OSV query time;
 - `targets[]`: every target with its `status` (`ok`, `failed`, `not_applicable`) and `packages_scanned`; the Trivy and the OSV scan of a target are two entries with one id;
 - `findings[]`: the raw layer, one finding per vulnerability in one package of one target from one scanner. Fields include `id`, `names`, `published`, `severity`, `fixed_version`;
@@ -58,14 +58,14 @@ A version is all targets of one ref. Its fields: `ref`, `kind` (`development`, `
 
 - `status` is `failed` only when a scan of one of its targets failed (Trivy, or OSV `failed`). `ok` does not mean every target was scanned: a `not_applicable` target (for example an image not published for the tag yet) does not fail the version; read the statuses in `targets[]` for the coverage. A `failed` version keeps the records and counts of its `ok` targets, so they are partial.
 - `counts`: `c`, `h`, `m`, `l`, `unknown` (severities), `all` and `fixable`, computed from the `vulns[]` of the version. The unit is one vulnerability in one package.
-- `vulns[]`, sorted by the key `(class, norm(pkg), id)`; the package version and the ref are not part of it. A record: `id`, `names`, `pkg`, `class` (`lang` for an application dependency, `os` for an image OS package), `severity`, `fixed`, `dev`, `installed`, `where` (target ids), `sources` (`trivy`, `osv`), `published` (the earliest date among the findings, or `null`) and `accepted` (`{"until": "YYYY-MM-DD"}` or `null`).
+- `vulns[]`, sorted by the key `(class, norm(pkg), id)`, where `norm(pkg)` is the package name in lowercase with each run of `-`, `_` and `.` turned into one `-`; the package version and the ref are not part of it. A record: `id`, `names`, `pkg`, `class` (`lang` for an application dependency, `os` for an image OS package), `severity`, `fixed`, `dev`, `installed`, `where` (target ids), `sources` (`trivy`, `osv`), `published` (the earliest date among the findings, or `null`) and `accepted` (`{"until": "YYYY-MM-DD"}` or `null`).
 
 How the records are made. The findings of a version for one package merge into one record when their `names` intersect; `names` are the id and the real aliases of one vulnerability.
 
 - Trivy: the id is `VulnerabilityID`; `names` is the id alone.
 - OSV library advisories (`lang`): the id is the smallest CVE among the ids and aliases of the advisory, so a GHSA and its CVE are one record from the first day; without a CVE, the first id. `names` are the ids and aliases (CVE, GHSA, PYSEC, GO, RUSTSEC).
-- OSV OS groups (`os`): one record per own CVE of the group (`UBUNTU-CVE-Y-N` reads as `CVE-Y-N`), with the fields of the group member of that CVE, the Ubuntu priority first. The CVEs that are only aliases of the group are not records: they are the list of a bulletin, not names of this package's vulnerabilities. A group of bulletins alone (`USN-...`) gives one record with the bulletin id and severity `UNKNOWN`.
-- Severity: the Trivy rating wins; a record without Trivy takes the OSV rating. An OSV-only `os` record takes the Ubuntu priority of its member (`negligible` as `LOW`); other distributions give no priority, so `UNKNOWN`.
+- OSV OS groups (`os`): one record per own CVE of the group (`UBUNTU-CVE-Y-N` reads as `CVE-Y-N`), with the fields of the member record of that CVE (a record with an Ubuntu priority is preferred). The CVEs that are only aliases of the group are not records: they are the list of a bulletin, not names of this package's vulnerabilities. A group of bulletins alone (`USN-...`) gives one record with the bulletin id and severity `UNKNOWN`.
+- Severity: the worst Trivy rating among the record's findings, else the worst OSV rating. An OSV-only `os` record takes the Ubuntu priority of its member (`negligible` as `LOW`); other distributions give no priority, so `UNKNOWN`.
 - `fixed` joins the fixed versions of the findings (Trivy first); `dev` is true only when every finding is for a development-only package.
 
 ## Risk acceptance
@@ -76,12 +76,12 @@ The engine reads the `.trivyignore` of the default branch and marks the records 
 - A line accepts a record only with an acting `exp:` (the date is after the day of the run; on the day itself it no longer acts), and only when its id equals the `id` or one of the `names` of the record. It matches in every version of the run. The matching is by id and names only, so it can be wider than the Trivy gate itself: purl and path scoping on a line is not applied.
 - Intended differences from Trivy: a line without `exp:` is not an acceptance here (Trivy ignores such a vulnerability forever); when several lines name one vulnerability, the earliest acting date wins (Trivy takes the first match).
 - `ignores[]`: per line `id`, `until`, `expired`, `bad_expiry`, `no_expiry` and `matched` (the line matched a record of any version).
-- `ignores_error` is `null`, or the reason `ignores` is `null` (no record is `accepted` then): `the workflow does not pass the ignore file`, `checkout failed`, `no default-branch target in this run` (a run focused on one tag), or the file could not be read.
+- `ignores_error` is `null`, or the reason `ignores` is `null` (no record is `accepted` then): `the workflow does not pass the ignore file`, `no readable status file for <id>` (the `status.json` of the default-branch source target is missing, unreadable or not a JSON object), `unexpected ignorefile value: ...`, `checkout failed`, `no default-branch target in this run` (a run focused on one tag), or the file could not be read.
 - `.trivyignore.yaml` is not read.
 
 ## Versioning
 
-Releases are git tags `vX.Y.Z`. Schema 4 of `report.json` is a breaking change: the `counts` block is gone (the numbers are in `versions[].counts`), so consumers branch on `schema_version`. Consumers pin a tag, for example:
+Releases are git tags `vX.Y.Z`. Schema 4 of `report.json` is a breaking change: the `counts` block is gone (the numbers are in `versions[].counts`), and `findings[]` changed too: a Trivy finding's id is `VulnerabilityID` (no longer the lowest CVE among `VulnerabilityID` and `VendorIDs`); an OSV `os` group gives one finding per own CVE with that member's Ubuntu priority, fixes and date (was one finding per group with the group's CVSS bucket); a bulletin-only group gives one `UNKNOWN` finding with the smallest bulletin id. Consumers therefore branch on `schema_version`. Consumers pin a tag, for example:
 
 ```yml
 - uses: epam/ai-dial-sec-sca/actions/sca_merge_results@v0.7.0

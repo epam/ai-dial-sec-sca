@@ -120,13 +120,16 @@ def test_an_unexpected_ignorefile_value_is_an_error(tmp_path):
     assert report["ignores_error"] == "unexpected ignorefile value: 'maybe'"
 
 
-def test_an_unreadable_or_non_object_status_file_means_no_key(tmp_path):
+def test_an_unreadable_or_non_object_status_file_is_named(tmp_path):
     for body in ("{not json", "[1]", ""):
         report = add(tmp_path, None)
         (tmp_path / "trivy" / f"{SRC}.status.json").write_text(body)
         add_ignores(report, tmp_path)
         assert report["ignores"] is None
-        assert report["ignores_error"] == "the workflow does not pass the ignore file"
+        assert report["ignores_error"] == f"no readable status file for {SRC}"
+    (tmp_path / "trivy" / f"{SRC}.status.json").unlink()
+    add_ignores(report, tmp_path)
+    assert report["ignores_error"] == f"no readable status file for {SRC}"
 
 
 def test_the_unreadable_file_reason_has_no_path(tmp_path):

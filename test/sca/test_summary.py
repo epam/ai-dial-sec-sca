@@ -699,7 +699,7 @@ def test_an_unread_ignore_file_is_one_header_line_not_a_section():
     doc = report([target("s")], [])
     doc["ignores"], doc["ignores_error"] = None, "checkout failed"
     text = build_summary(doc)
-    assert "\n- Risk acceptance not applied: checkout failed\n" in text
+    assert "\n- Risk acceptance not applied: checkout failed.\n" in text
     assert "## Ignore file" not in text
 
 
@@ -828,4 +828,13 @@ def test_a_record_published_within_14_days_is_new(published, mark):
     f = finding("s", "CVE-1", "lib", published=published)
     text = build_summary(report([target("s")], [f]))
     assert ("CVE-1](https://example.test/CVE-1) (new in DB) |" in text) is mark
-    assert "new in DB: published within 14 days" in text
+    assert ("new in DB: published within 14 days" in text) is mark
+
+
+def test_the_legend_names_accepted_until_when_a_record_is_accepted():
+    f = finding("s", "CVE-1", "lib")
+    doc = report([target("s")], [f])
+    doc["versions"][0]["vulns"][0]["accepted"] = {"until": "2027-01-01"}
+    text = build_summary(doc)
+    assert "CVE-1](https://example.test/CVE-1) (accepted until 2027-01-01) |" in text
+    assert "accepted until D: the default-branch .trivyignore" in text

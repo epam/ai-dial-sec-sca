@@ -299,9 +299,10 @@ def normalize_osv(
             own = inventory.get((norm(pkg), version), {**no_graph(), "locations": []})
             by_cve: dict[str, Mapping[str, Any]] = {}  # CVE -> its record
             for v in sorted(
-                vulns.values(), key=lambda v: (ubuntu_priority(v) == "UNKNOWN", v["id"])
+                vulns.values() if cls == "os" else (),
+                key=lambda v: (ubuntu_priority(v) == "UNKNOWN", v["id"]),
             ):
-                if cls == "os" and (m := OWN_CVE.fullmatch(v["id"])):
+                if m := OWN_CVE.fullmatch(v["id"]):
                     by_cve.setdefault(m[1], v)
             for group in entry.get("groups", []):
                 gids = group["ids"]

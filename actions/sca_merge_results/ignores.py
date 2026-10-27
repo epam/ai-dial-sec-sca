@@ -62,9 +62,14 @@ def read_ignores(
         return None, "no default-branch target in this run"
     trivy = parts_dir / "trivy"
     try:
-        state = read_json(trivy / f"{tid}.status.json")["ignorefile"]
-    except (OSError, ValueError, KeyError, TypeError):
+        status = read_json(trivy / f"{tid}.status.json")
+    except (OSError, ValueError):
+        status = None
+    if not isinstance(status, dict):
+        return None, f"no readable status file for {tid}"
+    if "ignorefile" not in status:
         return None, "the workflow does not pass the ignore file"
+    state = status["ignorefile"]
     if state is None:
         return None, "checkout failed"
     if state == "absent":

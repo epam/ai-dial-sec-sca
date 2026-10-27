@@ -85,6 +85,15 @@ def components(findings: Sequence[Finding]) -> list[list[Finding]]:
     return list(groups.values())
 
 
+def fixed_of(f: Finding) -> list[str]:
+    return [x.strip() for x in f["fixed_version"].split(",") if x.strip()]
+
+
+def pkg_of(fs: Sequence[Finding], source_ids: set[str]) -> str:
+    """The package name as a source target spells it, else as the first finding."""
+    return next((f for f in fs if f["target"] in source_ids), fs[0])["pkg"]
+
+
 def record_of(fs: Sequence[Finding], source_ids: set[str]) -> dict[str, Any]:
     """The vulnerability record of one component of findings (Trivy first, then OSV,
     each by target and id).
@@ -94,12 +103,12 @@ def record_of(fs: Sequence[Finding], source_ids: set[str]) -> dict[str, Any]:
     names = {n for f in fs for n in f["names"]}
     # the rating of Trivy wins; OSV rates a vulnerability Trivy does not report
     rated = [f for f in fs if f["scanner"] == "trivy"] or fs
-    fixed = (x.strip() for f in fs for x in f["fixed_version"].split(",") if x.strip())
+    fixed = (x for f in fs for x in fixed_of(f))
     dates = [f["published"] for f in fs if f["published"]]
     return {
         "id": vid,
         "names": [vid, *sorted(names - {vid})],
-        "pkg": next((f for f in fs if f["target"] in source_ids), fs[0])["pkg"],
+        "pkg": pkg_of(fs, source_ids),
         "class": fs[0]["class"],
         "severity": min((f["severity"] for f in rated), key=SEVERITIES.index),
         "fixed": ", ".join(dict.fromkeys(fixed)),

@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from normalize import SEVERITIES, norm
-from vulns import COUNT_KEYS, VERSION, counts_of
+from vulns import COUNT_KEYS, VERSION, counts_of, fixed_of, pkg_of
 
 # GitHub rejects a step summary over 1 MiB; the rest of the limit is left for the
 # parts of the job summary that are not this one
@@ -62,9 +62,7 @@ def package_rows(
             v = records[(f["class"], norm(f["pkg"]), f["id"])]
             if v["id"] not in found:
                 found[v["id"]] = {**v, "url": f["url"], "note": note(v), "fixed": []}
-            found[v["id"]]["fixed"] += [
-                x.strip() for x in f["fixed_version"].split(",") if x.strip()
-            ]
+            found[v["id"]]["fixed"] += fixed_of(f)
         ordered = sorted(
             found.values(), key=lambda v: (SEVERITIES.index(v["severity"]), v["id"])
         )
@@ -76,7 +74,7 @@ def package_rows(
         rows.append(
             {
                 "class": key[0],
-                "pkg": next((f for f in fs if f["target"] in source_ids), fs[0])["pkg"],
+                "pkg": pkg_of(fs, source_ids),
                 "version": fs[0]["version"] if key[0] == "os" else key[2],
                 "vulns": ordered,
                 "severity": ordered[0]["severity"],
@@ -212,7 +210,7 @@ def header(report: Mapping[str, Any]) -> list[str]:
             "repository.",
         )
     if report["ignores_error"] and not report.get("scan_ref"):
-        notes.append(f"Risk acceptance not applied: {report['ignores_error']}")
+        notes.append(f"Risk acceptance not applied: {report['ignores_error']}.")
     return [*lines, *(f"- {n}" for n in notes), *([""] if notes else [])]
 
 
@@ -369,15 +367,20 @@ def packages_table(
         for v in versions
     ]
     rows.append(["**All (unique)**", "", *counts(unique)])
-    return [
+    lines = [
         *table_lines(head, rows, 2),
         "",
         "Vulnerable libraries by worst severity; a package in several branches/tags is "
         "counted once in the last row.",
-        "",
-        "new in DB: published within 14 days; fixed in X: not found in release X, "
-        "which has the same targets.",
     ]
+    if any(v["note"] for r in unique for v in r["vulns"]):
+        lines += [
+            "",
+            "new in DB: published within 14 days; accepted until D: the default-branch "
+            ".trivyignore accepts it until D; fixed in X: not found in release X, "
+            "which has the same targets.",
+        ]
+    return lines
 
 
 def version_section(
@@ -466,7 +469,7 @@ def build_summary(report: Mapping[str, Any]) -> str:
             and newest_stems == target_stems(report, version)
         )
 
-        def note(r: Mapping[str, Any]) -> str:
+        def note(r: Mapping[str, Any], hint: bool = hint) -> str:
             marks = []
             if (r["published"] or "")[:10] >= cutoff:
                 marks.append("new in DB")
