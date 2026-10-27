@@ -15,12 +15,20 @@ The actions share the code in `actions/_sca_lib` (it is imported through `PYTHON
 
 ## Job summary
 
-`summary.md` is organized by version (a branch or a release tag), because a fixer needs to know what to bump where. Only two tables and the version headings are visible; everything else is collapsed.
+`summary.md` is organized by version (a branch or a release tag), because a fixer needs to know what to bump where. Only two tables and the version headings are visible; everything else is collapsed. The numbers come from `versions[]` of `report.json`, so the summary and the report agree.
 
-- `Vulnerabilities`: one row per scanned version (`development` first, then releases from the newest) with the unique vulnerabilities by their own severity and how many have a fix (`Fixable`). A vulnerability found under several ids counts once, and one present in several versions counts once in the last row, `All (unique)`. That row equals `counts.total` of `report.json`.
+- `Vulnerabilities`: one row per scanned version (`development` first, then releases from the newest) with the vulnerabilities by severity (`versions[].counts`) and how many have a fix (`Fixable`). A version whose scan failed shows what its `ok` targets found and is marked `(partial)`, as is `All (unique)` when any version failed. The last row, `All (unique)`, counts a vulnerability once however many versions have it, at its worst severity.
 - `Packages to update`: the same rows with the vulnerable libraries by their worst severity, the vulnerable OS packages and how many packages have a fix. A package in several versions counts once in the last row.
 - A section per version with its libraries and base image OS packages, each in a collapsed table. A package seen in the source and in the images of one version is one row, with `Seen in` naming where (`src` or the image name). Rows with a fix come first, development-only packages (marked `dev`) after the others, packages with no fix last, then by severity.
+- `Ignore file`: the audit of the `.trivyignore` lines (expired, without expiry, with a bad date, matching nothing). When the file was not read, a line under the header says why (`Risk acceptance not applied: ...`); a run focused on one tag says nothing.
 - `Scan details by target`: the status of every scan, including the failed and not applicable ones.
+- Health warnings under the header: the Trivy DB is older than 48 hours at the time of the report, or an `ok` Trivy target scanned no packages.
+
+Marks after a vulnerability id, in brackets:
+
+- `new in DB`: the vulnerability was published at most 14 days before the run.
+- `accepted until D`: a line of the default-branch `.trivyignore` accepts it until `D` (see Risk acceptance).
+- `fixed in X`: on a release or a release candidate older than the newest release `X`: none of the names of the vulnerability is found in `X` (same class; the package name does not count, so a renamed package is not a fix). Shown only when both versions have the same targets, all their Trivy scans are `ok` and none scanned 0 packages.
 
 A package is not fixable when none of its vulnerabilities has a fixed version. If only some have one, it counts as fixable and `Fixed` lists the versions that exist.
 
@@ -35,40 +43,48 @@ The tests need Python 3.12 and no network access. They run in GitHub Actions on 
 
 ## report.json
 
-`sca_merge_results` writes `report.json` (`schema_version` 3): the run header, `tools`, `targets` with their status, the flat `findings` list and, since version 3, a `counts` block. Consumers (for example notifications) read `counts` instead of counting the findings again.
+`sca_merge_results` writes `report.json` (`schema_version` 4):
 
-`counts` is computed from the same deduplicated rows as `summary.md`, so the numbers match the summary:
+- the header: `engine` (the action ref the runner used: a tag, a branch or a commit SHA; `null` outside GitHub Actions), `repo`, `commit_sha`, `default_branch`, `run_id`, `run_attempt`, `run_url`, `generated_utc`, `event`, `actor`, and, when set, `scan_ref` and `forced_image_scan`;
+- `tools`: the versions of Trivy and osv-scanner, the Trivy DBs and the OSV query time;
+- `targets[]`: every target with its `status` (`ok`, `failed`, `not_applicable`) and `packages_scanned`; the Trivy and the OSV scan of a target are two entries with one id;
+- `findings[]`: the raw layer, one finding per vulnerability in one package of one target from one scanner. Fields include `id`, `names`, `published`, `severity`, `fixed_version`;
+- `versions[]`: the vulnerability records per version;
+- `ignores[]` and `ignores_error`: risk acceptance (see below).
 
-- a vulnerability is unique per package, whatever its version (id + package; findings of one vulnerability under different ids merge by shared aliases, and Trivy's severity wins over OSV's);
-- `fixable` means a fixed version is known (to either scanner), the same rule as the "fixable" in the summary headings;
-- `total` counts the unique vulnerabilities of the whole repository, so a finding present in several targets counts once; `targets` counts them per target id, so the targets do not add up to `total`;
-- a target that is not `ok` (`failed`, `not_applicable`) has its `status` only; the status of a target is its Trivy scan's.
+### versions[]
 
-```json
-"counts": {
-  "total": {
-    "all": 5, "fixable": 3,
-    "by_severity": {
-      "CRITICAL": {"all": 1, "fixable": 1},
-      "HIGH": {"all": 2, "fixable": 1},
-      "MEDIUM": {"all": 1, "fixable": 1},
-      "LOW": {"all": 1, "fixable": 0},
-      "UNKNOWN": {"all": 0, "fixable": 0}
-    }
-  },
-  "targets": {
-    "source-development": {"status": "ok", "all": 3, "fixable": 2, "by_severity": {"...": "..."}},
-    "app-1.0": {"status": "failed"}
-  }
-}
-```
+A version is all targets of one ref. Its fields: `ref`, `kind` (`development`, `release`, `candidate`), `latest` (the newest `ok` release), `status`, `targets` (target ids), `counts` and `vulns[]`.
+
+- `status` is `failed` only when a scan of one of its targets failed (Trivy, or OSV `failed`). `ok` does not mean every target was scanned: a `not_applicable` target (for example an image not published for the tag yet) does not fail the version; read the statuses in `targets[]` for the coverage. A `failed` version keeps the records and counts of its `ok` targets, so they are partial.
+- `counts`: `c`, `h`, `m`, `l`, `unknown` (severities), `all` and `fixable`, computed from the `vulns[]` of the version. The unit is one vulnerability in one package.
+- `vulns[]`, sorted by the key `(class, norm(pkg), id)`; the package version and the ref are not part of it. A record: `id`, `names`, `pkg`, `class` (`lang` for an application dependency, `os` for an image OS package), `severity`, `fixed`, `dev`, `installed`, `where` (target ids), `sources` (`trivy`, `osv`), `published` (the earliest date among the findings, or `null`) and `accepted` (`{"until": "YYYY-MM-DD"}` or `null`).
+
+How the records are made. The findings of a version for one package merge into one record when their `names` intersect; `names` are the id and the real aliases of one vulnerability.
+
+- Trivy: the id is `VulnerabilityID`; `names` is the id alone.
+- OSV library advisories (`lang`): the id is the smallest CVE among the ids and aliases of the advisory, so a GHSA and its CVE are one record from the first day; without a CVE, the first id. `names` are the ids and aliases (CVE, GHSA, PYSEC, GO, RUSTSEC).
+- OSV OS groups (`os`): one record per own CVE of the group (`UBUNTU-CVE-Y-N` reads as `CVE-Y-N`), with the fields of the group member of that CVE, the Ubuntu priority first. The CVEs that are only aliases of the group are not records: they are the list of a bulletin, not names of this package's vulnerabilities. A group of bulletins alone (`USN-...`) gives one record with the bulletin id and severity `UNKNOWN`.
+- Severity: the Trivy rating wins; a record without Trivy takes the OSV rating. An OSV-only `os` record takes the Ubuntu priority of its member (`negligible` as `LOW`); other distributions give no priority, so `UNKNOWN`.
+- `fixed` joins the fixed versions of the findings (Trivy first); `dev` is true only when every finding is for a development-only package.
+
+## Risk acceptance
+
+The engine reads the `.trivyignore` of the default branch and marks the records of every version; no finding is removed, and the scheduled scan itself does not apply ignores. The workflow passes the file and states `ignorefile` (`present`, `absent`, or `null` when the checkout failed) in the `status.json` of the source target of the default branch.
+
+- The grammar is the plain Trivy one: the first field of a line is the id, the first `exp:YYYY-MM-DD` counts, a line with a bad date does not act (the file as a whole is still read), a comment is a whole line starting with `#`, blank lines are skipped.
+- A line accepts a record only with an acting `exp:` (the date is after the day of the run; on the day itself it no longer acts), and only when its id equals the `id` or one of the `names` of the record. It matches in every version of the run. The matching is by id and names only, so it can be wider than the Trivy gate itself: purl and path scoping on a line is not applied.
+- Intended differences from Trivy: a line without `exp:` is not an acceptance here (Trivy ignores such a vulnerability forever); when several lines name one vulnerability, the earliest acting date wins (Trivy takes the first match).
+- `ignores[]`: per line `id`, `until`, `expired`, `bad_expiry`, `no_expiry` and `matched` (the line matched a record of any version).
+- `ignores_error` is `null`, or the reason `ignores` is `null` (no record is `accepted` then): `the workflow does not pass the ignore file`, `checkout failed`, `no default-branch target in this run` (a run focused on one tag), or the file could not be read.
+- `.trivyignore.yaml` is not read.
 
 ## Versioning
 
-Releases are git tags `vX.Y.Z`. Consumers pin a tag, for example:
+Releases are git tags `vX.Y.Z`. Schema 4 of `report.json` is a breaking change: the `counts` block is gone (the numbers are in `versions[].counts`), so consumers branch on `schema_version`. Consumers pin a tag, for example:
 
 ```yml
-- uses: epam/ai-dial-sec-sca/actions/sca_merge_results@v0.4.1
+- uses: epam/ai-dial-sec-sca/actions/sca_merge_results@v0.7.0
 ```
 
 The third-party actions are pinned by commit SHA and osv-scanner by the sha256 of its binary (in `actions/sca_query_osv/action.yml`). Trivy is pinned by version only: `aquasecurity/setup-trivy` verifies the download against the checksums published with the same release, not against a value pinned here.
