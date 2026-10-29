@@ -54,13 +54,30 @@ def trivy(*results, tid="source-development"):
     return list(findings.values()), inventory
 
 
-def test_id_is_the_cve_of_the_id_or_the_aliases():
+def test_pick_id_is_the_first_cve_else_the_first_id():
     assert pick_id(["GHSA-aaaa", "CVE-2026-2", "CVE-2026-1"]) == "CVE-2026-1"
     assert pick_id(["GHSA-aaaa", "PYSEC-1"]) == "GHSA-aaaa"
+
+
+def test_trivy_id_is_its_own_vulnerability_id_with_names_and_published():
     rows, _ = trivy(
-        result([package("a")], [vuln("a", "GHSA-aaaa", VendorIDs=["CVE-2026-7"])])
+        result(
+            [package("a")],
+            [
+                vuln(
+                    "a",
+                    "GHSA-aaaa",
+                    VendorIDs=["CVE-2026-7"],
+                    PublishedDate="2026-03-04T10:00:00Z",
+                )
+            ],
+        )
     )
-    assert (rows[0]["id"], rows[0]["aliases"]) == ("CVE-2026-7", ["GHSA-aaaa"])
+    row = rows[0]
+    assert (row["id"], row["aliases"]) == ("GHSA-aaaa", ["CVE-2026-7"])
+    assert (row["names"], row["published"]) == (["GHSA-aaaa"], "2026-03-04")
+    rows, _ = trivy(result([package("a")], [vuln("a")]))
+    assert rows[0]["published"] is None
 
 
 def test_copies_in_several_lockfiles_become_one_row_with_locations():
@@ -454,3 +471,258 @@ def test_osv_image_fixed_version_is_filtered_on_the_source_name():
     os_row = next(r for r in findings.values() if r["id"] == "CVE-2026-1")
     # the record is keyed by the source name `expat`, not the installed `libexpat`
     assert os_row["fixed_version"] == "2.8.6-r0"
+
+
+# --- findings rules of schema 4 ---------------------------------------------------
+
+
+def osv_record(rid, aliases=(), priority=None, fixed="1.0", published=None):
+    return {
+        "id": rid,
+        "summary": f"about {rid}",
+        "aliases": list(aliases),
+        "published": published,
+        "severity": [{"type": "Ubuntu", "score": priority}] if priority else [],
+        "affected": [
+            {
+                "package": {"name": "a"},
+                "ranges": [
+                    {
+                        "type": "ECOSYSTEM",
+                        "events": [{"introduced": "0"}, {"fixed": fixed}],
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def osv_os(records, *groups):
+    """The OS findings of one package: ``groups`` are (ids, aliases) pairs."""
+    entry = {
+        "package": {"name": "a", "version": "1.0", "ecosystem": "Ubuntu:24.04"},
+        "vulnerabilities": records,
+        "groups": [
+            {"ids": list(i), "aliases": list(a), "max_severity": "9.8"}
+            for i, a in groups
+        ],
+    }
+    source = {"path": "dpkg", "type": "os"}
+    findings: dict = {}
+    normalize_osv(
+        "image-x", {"results": [{"source": source, "packages": [entry]}]}, findings, {}
+    )
+    assert len({r["id"] for r in findings.values()}) == len(findings)  # one row per CVE
+    return {r["id"]: r for r in findings.values()}
+
+
+def test_osv_lang_names_are_the_advisory_names_without_distro_bulletins():
+    native = osv_native(aliases=("CVE-2026-9", "DLA-1-1", "USN-1-1"))
+    entry = native["results"][0]["packages"][0]
+    entry["vulnerabilities"][0]["published"] = "2026-02-03T00:00:00Z"
+    entry["vulnerabilities"].append({"id": "x", "published": "2025-12-31T00:00:00Z"})
+    entry["groups"][0]["ids"].append("x")
+    findings: dict = {}
+    normalize_osv("t", native, findings, {})
+    (row,) = findings.values()
+    assert row["id"] == "CVE-2026-9"
+    assert row["names"] == ["CVE-2026-9", "GHSA-aaaa"]
+    assert row["published"] == "2025-12-31"
+
+
+def test_osv_os_bundle_gives_one_finding_per_own_cve_from_its_member():
+    cves = [f"CVE-2026-{n}" for n in range(1, 7)]
+    priorities = ["negligible", "low", "medium", "high", "critical", "medium"]
+    records = [
+        osv_record(
+            f"UBUNTU-{c}", priority=p, fixed=f"1.{n}", published=f"2026-01-0{n + 1}"
+        )
+        for n, (c, p) in enumerate(zip(cves, priorities, strict=True))
+    ]
+    rows = osv_os(
+        records, (["USN-8702-1", *(f"UBUNTU-{c}" for c in cves)], ["CVE-2026-7", *cves])
+    )
+    assert sorted(rows) == cves  # none for CVE-2026-7
+    severities = ["LOW", "LOW", "MEDIUM", "HIGH", "CRITICAL", "MEDIUM"]
+    assert [rows[c]["severity"] for c in cves] == severities
+    assert [rows[c]["fixed_version"] for c in cves] == [f"1.{n}" for n in range(6)]
+    assert rows[cves[2]]["published"] == "2026-01-03"
+    assert rows[cves[0]]["url"] == "https://osv.dev/vulnerability/UBUNTU-CVE-2026-1"
+    assert rows[cves[0]]["aliases"] == ["UBUNTU-CVE-2026-1"]
+    assert all(r["names"] == [c] for c, r in rows.items())
+
+
+def test_osv_os_member_aliases_with_an_advisory_name_are_names():
+    rec = osv_record("UBUNTU-CVE-2026-1", ["GHSA-aaaa", "USN-1-1", "CVE-2026-2"])
+    row = osv_os([rec], (["UBUNTU-CVE-2026-1"], []))["CVE-2026-1"]
+    assert row["names"] == ["CVE-2026-1", "CVE-2026-2", "GHSA-aaaa"]
+
+
+def test_osv_os_member_lookup_and_own_cve_forms():
+    records = [
+        osv_record("CVE-2026-2", fixed="2.0"),
+        osv_record("UBUNTU-CVE-2026-2", priority="high", fixed="2.1"),
+        osv_record("UBUNTU-CVE-2026-3", priority="low", fixed="3.0"),
+    ]
+    rows = osv_os(
+        records,
+        (["CVE-2026-1"], []),  # plain id, no record at all
+        (["CVE-2026-2", "UBUNTU-CVE-2026-2"], []),  # two ids, one CVE
+        (["USN-1-1", "UBUNTU-CVE-2026-3"], []),
+        (["UBUNTU-CVE-2026-3"], []),  # the same CVE from a second group
+    )
+    assert sorted(rows) == ["CVE-2026-1", "CVE-2026-2", "CVE-2026-3"]
+    # the record with the Ubuntu priority wins over the plain CVE record
+    assert (rows["CVE-2026-2"]["severity"], rows["CVE-2026-2"]["fixed_version"]) == (
+        "HIGH",
+        "2.1",
+    )
+    assert rows["CVE-2026-3"]["severity"] == "LOW"  # found, though not by group ids
+
+
+def test_osv_os_cve_without_a_record_is_unknown_and_empty():
+    row = osv_os([], (["USN-1-1", "UBUNTU-CVE-2026-1"], []))["CVE-2026-1"]
+    assert (row["severity"], row["fixed_version"], row["published"]) == (
+        "UNKNOWN",
+        "",
+        None,
+    )
+    assert row["url"].endswith("UBUNTU-CVE-2026-1")
+    assert (row["aliases"], row["names"], row["title"]) == (
+        ["UBUNTU-CVE-2026-1"],
+        ["CVE-2026-1"],
+        "",
+    )
+
+
+def test_osv_os_group_with_only_bulletins_is_one_unknown_finding():
+    records = [
+        osv_record("USN-2-1", published="2026-05-06"),
+        osv_record("USN-1-1", published="2026-04-05"),
+    ]
+    rows = osv_os(records, (["USN-2-1", "USN-1-1"], ["CVE-2026-5"]))
+    (row,) = rows.values()
+    assert (row["id"], row["severity"]) == ("USN-1-1", "UNKNOWN")
+    assert row["names"] == ["USN-1-1"]
+    assert row["aliases"] == ["USN-2-1", "CVE-2026-5"]
+    assert (row["fixed_version"], row["published"]) == ("1.0", "2026-04-05")
+
+
+def test_osv_os_severity_is_the_ubuntu_priority_never_the_cvss_bucket():
+    records = [
+        osv_record("UBUNTU-CVE-2026-1", priority="negligible"),
+        osv_record("DEBIAN-CVE-2026-2"),
+    ]
+    rows = osv_os(records, (["UBUNTU-CVE-2026-1"], []), (["DEBIAN-CVE-2026-2"], []))
+    assert (rows["CVE-2026-1"]["severity"], rows["CVE-2026-2"]["severity"]) == (
+        "LOW",
+        "UNKNOWN",
+    )
+
+
+def test_normalize_trivy_returns_every_package_of_both_classes():
+    os_result = {
+        "Target": "ubuntu",
+        "Type": "ubuntu",
+        "Class": "os-pkgs",
+        "Packages": [
+            {"Name": "bsdutils", "Version": "2.39", "Release": "9u1", "Epoch": 1},
+            {"Name": "musl", "Version": "1.2"},
+        ],
+    }
+    lang = result([{"ID": "a@1", "Name": "A_b", "Version": "1"}])
+    seen = normalize_trivy("t", {"Results": [lang, os_result]}, {}, {})
+    assert seen == {
+        ("lang", "a-b", "1"),
+        ("os", "bsdutils", "1:2.39-9u1"),
+        ("os", "musl", "1.2"),
+    }
+
+
+def cvss_of(cvss, **extra):
+    rows, _ = trivy(result([package("lib")], [vuln("lib", CVSS=cvss, **extra)]))
+    return rows[0]["cvss"]
+
+
+def test_trivy_cvss_vendor_priority_and_v3_before_v4():
+    v3 = {"V3Score": 7.5, "V3Vector": "CVSS:3.1/a"}
+    v4 = {"V40Score": 8.1, "V40Vector": "CVSS:4.0/b"}
+    got = cvss_of({"redhat": v3, "ghsa": v3, "nvd": v3, "zeta": v3})
+    assert got == {"score": 7.5, "vector": "CVSS:3.1/a", "source": "nvd"}
+    assert cvss_of({"redhat": v3, "zeta": v3})["source"] == "redhat"
+    assert cvss_of({"zeta": v3, "alpha": v3})["source"] == "alpha"
+    # a v3 of a lower-priority vendor beats the v4 of nvd
+    assert cvss_of({"nvd": v4, "redhat": v3})["source"] == "redhat"
+    assert cvss_of({"nvd": v4}) == {
+        "score": 8.1,
+        "vector": "CVSS:4.0/b",
+        "source": "nvd",
+    }
+    assert cvss_of({"nvd": {"V2Score": 5.0, "V2Vector": "AV:N"}}) is None
+    assert cvss_of({}) is None
+
+
+def test_trivy_modified_is_the_date_of_last_modified():
+    stamp = "2026-08-31T18:17:13.083Z"
+    rows, _ = trivy(result([package("lib")], [vuln("lib", LastModifiedDate=stamp)]))
+    assert rows[0]["modified"] == "2026-08-31"
+    rows, _ = trivy(result([package("lib")], [vuln("lib")]))
+    assert rows[0]["modified"] is None
+
+
+def test_osv_cvss_is_a_vector_without_a_score_and_modified_is_the_latest():
+    native = osv_native()
+    entry = native["results"][0]["packages"][0]
+    entry["vulnerabilities"][0] |= {
+        "modified": "2026-05-01T00:00:00Z",
+        "severity": [
+            {"type": "CVSS_V4", "score": "CVSS:4.0/z"},
+            {"type": "CVSS_V3", "score": "CVSS:3.1/y"},
+        ],
+    }
+    findings = {}
+    normalize_osv("t", native, findings, {})
+    (row,) = findings.values()
+    assert row["cvss"] == {"score": None, "vector": "CVSS:3.1/y", "source": "osv"}
+    assert row["modified"] == "2026-05-01"
+    v4 = [{"type": "CVSS_V4", "score": "CVSS:4.0/z"}]
+    entry["vulnerabilities"][0]["severity"] = v4
+    findings = {}
+    normalize_osv("t", native, findings, {})
+    assert next(iter(findings.values()))["cvss"]["vector"] == "CVSS:4.0/z"
+    entry["vulnerabilities"][0].pop("severity")
+    findings = {}
+    normalize_osv("t", native, findings, {})
+    assert next(iter(findings.values()))["cvss"] is None
+
+
+def test_lang_cvss_comes_from_the_member_that_gives_the_rating():
+    native = osv_native(group_ids=("GHSA-aaaa", "PYSEC-1"), severity="HIGH")
+    entry = native["results"][0]["packages"][0]
+    first, rated = entry["vulnerabilities"][0], {**entry["vulnerabilities"][0]}
+    first["database_specific"] = {}
+    first["severity"] = [{"type": "CVSS_V3", "score": "CVSS:3.1/plain"}]
+    rated |= {"id": "PYSEC-1", "database_specific": {"severity": "HIGH"}}
+    rated["severity"] = [{"type": "CVSS_V3", "score": "CVSS:3.1/rated"}]
+    entry["vulnerabilities"] = [first, rated]
+    findings = {}
+    normalize_osv("t", native, findings, {})
+    (row,) = findings.values()
+    assert row["severity"] == "HIGH" and row["cvss"]["vector"] == "CVSS:3.1/rated"
+
+
+def test_os_bundle_cves_take_the_vector_of_their_own_record():
+    native = osv_image_native()
+    entry = native["results"][0]["packages"][0]
+    first = entry["vulnerabilities"][0]
+    second = {**first, "id": "ALPINE-CVE-2026-2"}
+    first["severity"] = [{"type": "CVSS_V3", "score": "CVSS:3.1/one"}]
+    second["severity"] = [{"type": "CVSS_V3", "score": "CVSS:3.1/two"}]
+    entry["vulnerabilities"].append(second)
+    ids = ["ALPINE-CVE-2026-1", "ALPINE-CVE-2026-2"]
+    entry["groups"] = [{"ids": ids, "aliases": []}]
+    findings = {}
+    normalize_osv("app-development", native, findings, {})
+    rows = [r for r in findings.values() if r["class"] == "os"]
+    vectors = {r["id"]: r["cvss"]["vector"] for r in rows}
+    assert vectors == {"CVE-2026-1": "CVSS:3.1/one", "CVE-2026-2": "CVSS:3.1/two"}

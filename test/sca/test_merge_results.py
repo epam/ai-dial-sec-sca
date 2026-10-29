@@ -125,7 +125,7 @@ def test_report_has_targets_tools_and_one_finding_per_scanner_and_vulnerability(
     }
     run.part("osv", "source-development", osv_native(), osv_status)
     failed, report = run.merge()
-    assert failed == 0 and report["schema_version"] == 3
+    assert failed == 0 and report["schema_version"] == 4
     assert report["tools"] == {
         "trivy": "0.75.0",
         "trivy_db": DB["vulnerability_db_updated_at"],
@@ -144,6 +144,7 @@ def test_report_has_targets_tools_and_one_finding_per_scanner_and_vulnerability(
         "status": "ok",
         "reason": None,
         "packages_scanned": 1,
+        "os": None,
     }
     assert [(f["scanner"], f["id"], f["aliases"]) for f in report["findings"]] == [
         ("trivy", "CVE-2026-1", []),
@@ -161,6 +162,43 @@ def test_image_digest_is_taken_from_the_native_result(tmp_path):
     run.part("trivy", "app-development", trivy_native(), {"status": "ok"})
     digest = entry(run.merge()[1], "app-development")["image_digest"]
     assert digest == "ghcr.io/o/app@sha256:abc"
+
+
+def test_trivy_image_targets_carry_the_os_of_the_native_result(tmp_path):
+    targets = [
+        target("a-development", "trivy", "image"),
+        target("a-1.0", "trivy", "image"),
+        target("a-2.0", "trivy", "image", "failed", "x"),
+        target("a-3.0", "trivy", "image", "not_applicable", "x"),
+        target("source-development", "trivy"),
+        target("a-development", "osv", "image"),
+    ]
+    run = Run(tmp_path, targets)
+    eol = trivy_native()
+    eol["Metadata"]["OS"] = {"Family": "debian", "Name": "9", "EOSL": True}
+    live = trivy_native()
+    live["Metadata"]["OS"] = {"Family": "alpine", "Name": "3.24.2"}
+    source = trivy_native()
+    source["Metadata"]["OS"] = {"Family": "ignored", "Name": "x"}
+    run.part("trivy", "a-development", live, {"status": "ok"})
+    run.part("trivy", "a-1.0", eol, {"status": "ok"})
+    run.part("trivy", "a-2.0", None, {"status": "failed", "reason": "x"})
+    run.part("trivy", "source-development", source, {"status": "ok"})
+    report = run.merge()[1]
+    assert entry(report, "a-development")["os"] == {
+        "family": "alpine",
+        "name": "3.24.2",
+        "eosl": False,
+    }
+    assert entry(report, "a-1.0")["os"] == {
+        "family": "debian",
+        "name": "9",
+        "eosl": True,
+    }
+    for tid in ("a-2.0", "a-3.0", "source-development"):
+        assert entry(report, tid)["os"] is None
+    (osv,) = (t for t in report["targets"] if t["scanner"] == "osv")
+    assert "os" not in osv
 
 
 @pytest.mark.parametrize(
@@ -335,3 +373,61 @@ def test_a_forced_image_scan_reaches_the_report(tmp_path):
     report = run.merge()[1]
     assert report["forced_image_scan"] is True
     assert "scan_ref" not in report
+
+
+def test_report_header_has_engine_and_run_attempt_and_versions_replace_counts(tmp_path):
+    run = Run(tmp_path, [target("source-development", "trivy")])
+    run.part("trivy", "source-development", trivy_native([VULN]), {"status": "ok"})
+    run_merge(
+        run.targets_file, run.parts, run.out, "2026-10-14T00:00:00Z", DB, "v0.7.0", 2
+    )
+    report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
+    assert list(report)[:2] == ["schema_version", "engine"]
+    assert list(report).index("run_attempt") == list(report).index("run_id") + 1
+    assert report["engine"] == "v0.7.0" and report["run_attempt"] == 2
+    assert "counts" not in report
+    tail = ["findings", "versions", "ignores", "ignores_error"]
+    assert list(report)[-4:] == tail
+    (version,) = report["versions"]
+    assert version["counts"]["h"] == 1 and version["vulns"][0]["id"] == "CVE-2026-1"
+
+
+def test_main_reads_engine_and_run_attempt_from_the_environment(tmp_path, monkeypatch):
+    run = Run(tmp_path, [target("s", "trivy")])
+    path = "/r/_actions/epam/ai-dial-sec-sca/v0.7.0/actions/sca_merge_results"
+    monkeypatch.setenv("ACTION_PATH", path)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "3")
+    main(
+        [
+            "--targets-file",
+            str(run.targets_file),
+            "--parts-dir",
+            str(run.parts),
+            "--output-dir",
+            str(run.out),
+        ]
+    )
+    report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
+    assert (report["engine"], report["run_attempt"]) == ("v0.7.0", 3)
+
+
+@pytest.mark.parametrize("value", [None, "x"])
+def test_main_run_attempt_is_null_when_missing_or_not_a_number(
+    tmp_path, monkeypatch, value
+):
+    run = Run(tmp_path, [target("s", "trivy")])
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
+    if value:
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", value)
+    main(
+        [
+            "--targets-file",
+            str(run.targets_file),
+            "--parts-dir",
+            str(run.parts),
+            "--output-dir",
+            str(run.out),
+        ]
+    )
+    report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
+    assert report["run_attempt"] is None

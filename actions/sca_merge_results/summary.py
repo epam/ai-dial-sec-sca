@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from normalize import SEVERITIES, norm
+from vulns import COUNT_KEYS, VERSION, counts_of, fixed_of, pkg_of
 
 # GitHub rejects a step summary over 1 MiB; the rest of the limit is left for the
 # parts of the job summary that are not this one
@@ -37,75 +38,44 @@ def target_label(target: Mapping[str, Any], repo: str) -> str:
 
 
 def package_rows(
-    findings: Sequence[Finding], source_ids: set[str]
+    findings: Sequence[Finding],
+    source_ids: set[str],
+    vulns: Sequence[Mapping[str, Any]],
+    note: Callable[[Mapping[str, Any]], str],
 ) -> list[dict[str, Any]]:
     """One row per (class, normalized package name) - the version dropped for OS
-    packages, which the scanners spell differently (dpkg epochs and revisions) - with
-    its unique vulnerabilities merged over targets and scanners (Trivy's severity
-    wins). Rows without a fix come last, development-only packages after the others,
-    then worst severity first.
+    packages, which the scanners spell differently (dpkg epochs and revisions). Its
+    vulnerabilities are the ``vulns`` records its findings belong to (id, severity
+    and marks of the record; the fix from the row's own findings, a record spans the
+    installed versions). Rows without a fix come last, development-only packages
+    after the others, then worst severity first.
     """
+    records = {(v["class"], norm(v["pkg"]), n): v for v in vulns for n in v["names"]}
     groups: dict[tuple[str, ...], list[Finding]] = {}
-    for f in findings:
-        key = (f["class"], norm(f["pkg"])) if f["class"] == "os" else (
-            f["class"],
-            norm(f["pkg"]),
-            f["version"],
-        )
-        groups.setdefault(key, []).append(f)
+    for f in sorted(findings, key=lambda f: f["scanner"] != "trivy"):
+        key = (f["class"], norm(f["pkg"]))
+        groups.setdefault(key if key[0] == "os" else (*key, f["version"]), []).append(f)
     rows = []
     for key, fs in groups.items():
-        cls = key[0]
-        # an OS row keeps a version in its cell: the primary scanner's spelling
-        # (Trivy's, else OSV's) - the scanners spell one dpkg version differently,
-        # and both spellings in one cell would read as two installed versions
-        version = (
-            key[-1]
-            if len(key) == 3
-            else next((f for f in fs if f["scanner"] == "trivy"), fs[0])["version"]
-        )
-        # the name as written in a source target (lockfile), else the first seen
-        pkg = next((f for f in fs if f["target"] in source_ids), fs[0])["pkg"]
-        # findings of one vulnerability under different ids merge by shared aliases
-        vulns: list[dict[str, Any]] = []
-        for f in sorted(fs, key=lambda f: f["scanner"] != "trivy"):
-            names = {f["id"], *f.get("aliases", [])}
-            v = next((v for v in vulns if v["names"] & names), None)
-            if v is None:
-                v = {
-                    "id": f["id"],
-                    "names": set(),
-                    "severity": f["severity"],
-                    "url": f["url"],
-                    "fixed": [],
-                    "scanners": set(),
-                }
-                vulns.append(v)
-            v["names"] |= names
-            if f["id"].startswith("CVE-") and not v["id"].startswith("CVE-"):
-                v["id"], v["url"] = f["id"], f["url"]
-            v["fixed"] += [
-                x.strip() for x in f["fixed_version"].split(",") if x.strip()
-            ]
-            v["scanners"].add(f["scanner"])
+        found: dict[str, dict[str, Any]] = {}
+        for f in fs:
+            v = records[(f["class"], norm(f["pkg"]), f["id"])]
+            if v["id"] not in found:
+                found[v["id"]] = {**v, "url": f["url"], "note": note(v), "fixed": []}
+            found[v["id"]]["fixed"] += fixed_of(f)
         ordered = sorted(
-            vulns, key=lambda v: (SEVERITIES.index(v["severity"]), v["id"])
+            found.values(), key=lambda v: (SEVERITIES.index(v["severity"]), v["id"])
         )
         with_chain = next((f for f in fs if f["chain"]), None)
         in_source = [
             loc for f in fs if f["target"] in source_ids for loc in f["locations"]
         ]
         fixed = ", ".join(dict.fromkeys(x for v in ordered for x in v["fixed"]))
-        scanners = "+".join(
-            s[0].upper()
-            for s in ("trivy", "osv")
-            if any(s in v["scanners"] for v in ordered)
-        )
         rows.append(
             {
-                "class": cls,
-                "pkg": pkg,
-                "version": version,
+                "class": key[0],
+                "pkg": pkg_of(fs, source_ids),
+                "version": fs[0]["version"] if key[0] == "os" else key[2],
                 "vulns": ordered,
                 "severity": ordered[0]["severity"],
                 "fixed": fixed,
@@ -117,7 +87,11 @@ def package_rows(
                 "dev": all(f["dev"] for f in fs),
                 "where": in_source or [loc for f in fs for loc in f["locations"]],
                 "targets": {f["target"] for f in fs},
-                "scanners": scanners,
+                "scanners": "+".join(
+                    s[0].upper()
+                    for s in ("trivy", "osv")
+                    if any(f["scanner"] == s for f in fs)
+                ),
             }
         )
     return sorted(
@@ -151,6 +125,7 @@ def vulnerabilities_cell(row: Mapping[str, Any]) -> str:
     return ", ".join(
         (v["severity"][0] + " " if mixed else "")
         + (f"[{cell(v['id'])}]({v['url']})" if v["url"] else cell(v["id"]))
+        + cell(v["note"])
         for v in row["vulns"]
     )
 
@@ -196,141 +171,6 @@ def totals(libraries: Sequence[Any], os_rows: Sequence[Any]) -> str:
     )
 
 
-def unique_vulnerabilities(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """The vulnerabilities of package rows, each once by its id and package, whatever
-    the package version (one vulnerability of a package in several versions or
-    targets is one); findings under different ids merge by shared aliases.
-    """
-    found: list[dict[str, Any]] = []
-    index: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
-    for r in rows:
-        by_name = index.setdefault((r["class"], norm(r["pkg"])), {})
-        for v in r["vulns"]:
-            u = next((by_name[n] for n in v["names"] if n in by_name), None)
-            if u is None:
-                u = {"severity": v["severity"], "fixable": False}
-                found.append(u)
-            u["fixable"] = u["fixable"] or bool(v["fixed"])
-            by_name.update(dict.fromkeys(v["names"], u))
-    return found
-
-
-def severity_block(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Counts of the unique vulnerabilities of package rows: per severity and
-    overall, ``all`` and ``fixable`` (a fixed version is known).
-    """
-    by = {s: {"all": 0, "fixable": 0} for s in SEVERITIES}
-    for v in unique_vulnerabilities(rows):
-        by[v["severity"]]["all"] += 1
-        by[v["severity"]]["fixable"] += v["fixable"]
-    return {
-        "all": sum(b["all"] for b in by.values()),
-        "fixable": sum(b["fixable"] for b in by.values()),
-        "by_severity": by,
-    }
-
-
-def build_counts(report: Mapping[str, Any], rows: Rows | None = None) -> dict[str, Any]:
-    """The ``counts`` block of report.json, from the same rows the summary lists.
-
-    ``total`` counts the unique vulnerabilities of the repository (a finding present
-    in several targets counts once); ``targets`` counts them per target id, so the
-    targets do not sum to the total. A target that is not ``ok`` has its status only.
-    The status of a target is its Trivy scan's, as in the summary.
-    """
-    if rows is None:
-        rows = build_rows(report)
-    findings = report["findings"]
-    source_ids = rows.source_ids
-    targets: dict[str, Any] = {}
-    for t in sorted(report["targets"], key=lambda t: t["scanner"] != "trivy"):
-        targets.setdefault(t["id"], t)
-    result: dict[str, Any] = {}
-    for tid, t in targets.items():
-        if t["status"] == "ok":
-            t_rows = package_rows(
-                [f for f in findings if f["target"] == tid], source_ids
-            )
-            result[tid] = {"status": "ok", **severity_block(t_rows)}
-        else:
-            result[tid] = {"status": t["status"]}
-    return {
-        "total": severity_block(rows.all_rows),
-        "targets": result,
-        "versions": version_counts(report, rows),
-    }
-
-
-def version_counts(report: Mapping[str, Any], rows: Rows) -> list[dict[str, Any]]:
-    """One flat record per version of ``rows.by_version``, in that order: kind, whether
-    it is the latest release, scan status, and the severity counts of its unique
-    vulnerabilities. A version with any non-ok target is ``failed`` with zero counts.
-    ``latest`` marks the newest ``ok`` release, or no record if there is none.
-    """
-    default_branch = report["default_branch"]
-    by_id = {t["id"]: t for t in report["targets"]}
-    records = []
-    for ref, ids in rows.by_version:
-        failed = any(by_id[tid]["status"] != "ok" for tid in ids)
-        record: dict[str, Any] = {
-            "ref": ref,
-            "kind": version_kind(ref, default_branch),
-            "latest": False,  # resolved below, once every status is known
-            "status": "failed" if failed else "ok",
-            "c": 0,
-            "h": 0,
-            "m": 0,
-            "l": 0,
-            "unknown": 0,
-            "all": 0,
-            "fixable": 0,
-        }
-        if not failed:
-            record.update(flat_counts(severity_block(rows.version_rows[ref])))
-        records.append(record)
-    for record in records:
-        if record["status"] == "ok" and is_release(record["ref"], default_branch):
-            record["latest"] = True
-            break
-    return records
-
-
-def is_release(ref: str, default_branch: str | None) -> bool:
-    """A plain semver tag: not the default branch, not ``development``, not a
-    pre-release, and not a ref that does not parse as semver.
-    """
-    if ref == default_branch or ref == "development":
-        return False
-    m = VERSION.fullmatch(ref)
-    return m is not None and m[2] is None
-
-
-def version_kind(ref: str, default_branch: str | None) -> str:
-    """``development`` for the default branch or ``development``; ``candidate`` for a
-    semver with a pre-release part (``0.50.0-rc.1``); ``release`` otherwise.
-    """
-    if ref == default_branch or ref == "development":
-        return "development"
-    m = VERSION.fullmatch(ref)
-    if m and m[2] is not None:
-        return "candidate"
-    return "release"
-
-
-def flat_counts(block: Mapping[str, Any]) -> dict[str, Any]:
-    """The severity counts of a ``severity_block`` as a flat dict with short keys."""
-    by = block["by_severity"]
-    return {
-        "c": by["CRITICAL"]["all"],
-        "h": by["HIGH"]["all"],
-        "m": by["MEDIUM"]["all"],
-        "l": by["LOW"]["all"],
-        "unknown": by["UNKNOWN"]["all"],
-        "all": block["all"],
-        "fixable": block["fixable"],
-    }
-
-
 def scan_status(trivy: Mapping[str, Any], osv: Mapping[str, Any] | None) -> str:
     text = trivy["status"] + (f" ({trivy['reason']})" if trivy["reason"] else "")
     if trivy["status"] == "ok" and osv:
@@ -355,85 +195,48 @@ def header(report: Mapping[str, Any]) -> list[str]:
         f"Java DB {short_time(tools['trivy_java_db'])})",
         f"osv-scanner {tools['osv_scanner']} (queried {tools['osv_queried_at'] or 'n/a'})",
     ]
+    if report.get("engine"):
+        parts.append(f"engine {report['engine']}")
     if report["run_url"]:
         parts.append(f"[run {report['run_id']}]({report['run_url']})")
     lines = [f"# SCA · {report['repo']}", "", " · ".join(parts), ""]
-    one_offs = one_off_lines(report)
-    if one_offs:
-        lines += [*one_offs, ""]
-    return lines
-
-
-def one_off_lines(report: Mapping[str, Any]) -> list[str]:
-    """What this run covers beyond the regular release set, when it does: a focus
-    run on one tag, a direct OSV image scan forced for the run."""
-    lines = []
+    notes = health(report)
     if scan_ref := report.get("scan_ref"):
-        lines.append(f"Focused on tag `{scan_ref}` (a manual run on one tag).")
+        notes.insert(0, f"Focused on tag `{scan_ref}` (a manual run on one tag).")
     if report.get("forced_image_scan"):
-        lines.append(
+        notes.insert(
+            0,
             "The direct OSV image scan runs on this run although it is off for the "
-            "repository."
+            "repository.",
         )
+    if report["ignores_error"] and not report.get("scan_ref"):
+        notes.append(f"Risk acceptance not applied: {report['ignores_error']}.")
+    return [*lines, *(f"- {n}" for n in notes), *([""] if notes else [])]
+
+
+def stamp(value: str) -> datetime:
+    return datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
+
+
+def health(report: Mapping[str, Any]) -> list[str]:
+    """Warnings about the scan itself: a stale Trivy DB (over 48 hours at the time
+    of the report) and an ``ok`` Trivy target that scanned no packages.
+    """
+    lines = []
+    try:
+        age = stamp(report["generated_utc"]) - stamp(report["tools"]["trivy_db"])
+    except (TypeError, ValueError):
+        age = timedelta(0)
+    if age > timedelta(hours=48):
+        lines.append(f"**Warning:** the Trivy DB is {age // timedelta(hours=1)} h old.")
+    empty = [
+        t["id"]
+        for t in report["targets"]
+        if (t["scanner"], t["status"], t["packages_scanned"]) == ("trivy", "ok", 0)
+    ]
+    if empty:
+        lines.append(f"**Warning:** no packages scanned in {cell(', '.join(empty))}.")
     return lines
-
-
-VERSION = re.compile(r"(\d+(?:\.\d+)*)(-.+)?")
-
-
-def version_order(version: str) -> tuple[int, Any]:
-    """development first, then releases from the newest (a release candidate after
-    its final version), then whatever is not a version, alphabetically.
-    """
-    if version == "development":
-        return 0, ()
-    if m := VERSION.fullmatch(version):
-        return 1, (tuple(-int(n) for n in m[1].split(".")), m[2] is not None, m[2])
-    return 2, version
-
-
-def versions_of(report: Mapping[str, Any]) -> list[tuple[str, set[str]]]:
-    """(version, ids of its targets) in display order. The source and the images of
-    one version agree on it: a git tag may carry a ``v`` that a registry tag lacks.
-    A target without a ref (its resolution failed) belongs to no version.
-    """
-    ids: dict[str, set[str]] = {}
-    for t in report["targets"]:
-        if t["ref"]:
-            ids.setdefault(t["ref"].removeprefix("v"), set()).add(t["id"])
-    return sorted(ids.items(), key=lambda item: version_order(item[0]))
-
-
-@dataclass(frozen=True)
-class Rows:
-    """Common row context built once per report and shared by counts and summary."""
-
-    source_ids: set[str]
-    by_version: list[tuple[str, set[str]]]
-    version_rows: dict[str, list[dict[str, Any]]]
-    all_rows: list[dict[str, Any]]
-
-
-def build_rows(report: Mapping[str, Any]) -> Rows:
-    """Build the package rows used by both ``build_counts`` and ``build_summary``.
-
-    ``package_rows`` is the most expensive pass over findings; this gathers every
-    rows context the report needs in a single traversal set.
-    """
-    source_ids = {t["id"] for t in report["targets"] if t["kind"] == "fs"}
-    findings = report["findings"]
-    by_version = versions_of(report)
-    version_rows = {
-        version: package_rows([f for f in findings if f["target"] in ids], source_ids)
-        for version, ids in by_version
-    }
-    all_rows = package_rows(findings, source_ids)
-    return Rows(
-        source_ids=source_ids,
-        by_version=by_version,
-        version_rows=version_rows,
-        all_rows=all_rows,
-    )
 
 
 def scan_cell(report: Mapping[str, Any], ids: set[str]) -> str:
@@ -459,17 +262,30 @@ def scan_cell(report: Mapping[str, Any], ids: set[str]) -> str:
     return f"{'failed' if failed or osv_failed else 'ok'} ({', '.join(parts)})"
 
 
+def ignores_audit(report: Mapping[str, Any]) -> list[str]:
+    """What is wrong with the lines of ``.trivyignore``; nothing when all is well
+    or the file was not read (the header says so).
+    """
+    checks = (
+        ("Expired", lambda e: e["expired"]),
+        ("Without expiry", lambda e: e["no_expiry"]),
+        ("With a bad date", lambda e: e["bad_expiry"]),
+        ("Matching nothing", lambda e: not e["matched"]),
+    )
+    lines = []
+    for title, bad in checks:
+        found = [
+            e["id"] + (f" (until {e['until']})" if e["until"] else "")
+            for e in report["ignores"] or []
+            if bad(e)
+        ]
+        if found:
+            lines.append(f"- {title}: {cell(', '.join(found))}")
+    return lines
+
+
 def count_cell(n: int) -> str:
     return str(n) if n else "-"
-
-
-def severity_columns(counts: Sequence[Mapping[str, int]]) -> list[str]:
-    """Critical, High, Medium, Low, and Unknown only when something has it."""
-    return [
-        s
-        for s in SEVERITIES
-        if s != "UNKNOWN" or any(c.get(s, 0) for c in counts)
-    ]
 
 
 def table_lines(
@@ -484,30 +300,34 @@ def table_lines(
     ]
 
 
-def vulnerabilities_table(
-    by_version: Sequence[tuple[str, set[str]]],
-    version_rows: Mapping[str, Sequence[Mapping[str, Any]]],
-    all_rows: Sequence[Mapping[str, Any]],
-) -> list[str]:
-    """Unique vulnerabilities per version and over all; the last row is what
-    ``counts.total`` of report.json holds (the same function over the same rows).
+def vulnerabilities_table(versions: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The ``counts`` of every version, and the unique vulnerabilities over all
+    (the last row): the worst severity of a (class, package, id) key, fixable when
+    any of its records has a fix.
     """
-    blocks = [(v, severity_block(version_rows[v])) for v, _ in by_version]
-    total = severity_block(all_rows)
-    severities = severity_columns(
-        [{s: b["by_severity"][s]["all"] for s in SEVERITIES} for _, b in blocks]
-        + [{s: total["by_severity"][s]["all"] for s in SEVERITIES}]
-    )
+    unique: dict[tuple[str, str, str], dict[str, str]] = {}
+    for v in versions:
+        for r in v["vulns"]:
+            key = (r["class"], norm(r["pkg"]), r["id"])
+            u = unique.setdefault(key, {"severity": "UNKNOWN", "fixed": ""})
+            u["severity"] = min(u["severity"], r["severity"], key=SEVERITIES.index)
+            u["fixed"] = u["fixed"] or r["fixed"]
+    partial = " (partial)"
+    blocks = [
+        (cell(v["ref"] + (partial if v["status"] == "failed" else "")), v["counts"])
+        for v in versions
+    ]
+    any_failed = partial if any(v["status"] == "failed" for v in versions) else ""
+    blocks.append((f"**All (unique)**{any_failed}", counts_of([*unique.values()])))
+    unknown = any(c["unknown"] for _, c in blocks)
+    shown = [s for s in SEVERITIES if s != "UNKNOWN" or unknown]
 
-    def cells(block: Mapping[str, Any]) -> list[str]:
-        return [
-            *(count_cell(block["by_severity"][s]["all"]) for s in severities),
-            count_cell(block["fixable"]),
-        ]
+    def cells(c: Mapping[str, int]) -> list[str]:
+        counts = (count_cell(c[COUNT_KEYS[s]]) for s in shown)
+        return [*counts, count_cell(c["fixable"])]
 
-    head = ["Branch / tag", *(s.capitalize() for s in severities), "Fixable"]
-    rows = [[cell(v), *cells(b)] for v, b in blocks]
-    rows.append(["**All (unique)**", *cells(total)])
+    head = ["Branch / tag", *(s.capitalize() for s in shown), "Fixable"]
+    rows = [[label, *cells(c)] for label, c in blocks]
     return [
         *table_lines(head, rows),
         "",
@@ -518,13 +338,12 @@ def vulnerabilities_table(
 
 def packages_table(
     report: Mapping[str, Any],
-    by_version: Sequence[tuple[str, set[str]]],
+    versions: Sequence[Mapping[str, Any]],
     version_rows: Mapping[str, Sequence[Mapping[str, Any]]],
     unique: Sequence[Mapping[str, Any]],
 ) -> list[str]:
-    severities = severity_columns(
-        [{r["severity"]: 1 for r in unique if r["class"] == "lang"}]
-    )
+    unknown = any(r["severity"] == "UNKNOWN" for r in unique if r["class"] == "lang")
+    severities = [s for s in SEVERITIES if s != "UNKNOWN" or unknown]
 
     def counts(rows: Sequence[Mapping[str, Any]]) -> list[str]:
         libs = [r for r in rows if r["class"] == "lang"]
@@ -540,16 +359,28 @@ def packages_table(
     head = ["Branch / tag", "Scan", *(s.capitalize() for s in severities)]
     head += ["OS packages", "Fixable"]
     rows = [
-        [cell(v), cell(scan_cell(report, ids)), *counts(version_rows[v])]
-        for v, ids in by_version
+        [
+            cell(v["ref"]),
+            cell(scan_cell(report, set(v["targets"]))),
+            *counts(version_rows[v["ref"]]),
+        ]
+        for v in versions
     ]
     rows.append(["**All (unique)**", "", *counts(unique)])
-    return [
+    lines = [
         *table_lines(head, rows, 2),
         "",
         "Vulnerable libraries by worst severity; a package in several branches/tags is "
         "counted once in the last row.",
     ]
+    if any(v["note"] for r in unique for v in r["vulns"]):
+        lines += [
+            "",
+            "new in DB: published within 14 days; accepted until D: the default-branch "
+            ".trivyignore accepts it until D; fixed in X: not found in release X, "
+            "which has the same targets.",
+        ]
+    return lines
 
 
 def version_section(
@@ -596,33 +427,78 @@ def results_by_target(report: Mapping[str, Any]) -> list[str]:
     return [*lines, "", "</details>"]
 
 
-def build_summary(report: Mapping[str, Any], rows: Rows | None = None) -> str:
-    if rows is None:
-        rows = build_rows(report)
+def target_stems(
+    report: Mapping[str, Any], version: Mapping[str, Any]
+) -> set[str] | None:
+    """Target ids without the ref suffix; None unless every Trivy scan is ok."""
+    ts = [t for t in report["targets"] if t["id"] in version["targets"]]
+    if any(
+        t["status"] != "ok" or t["packages_scanned"] == 0
+        for t in ts
+        if t["scanner"] == "trivy"
+    ):
+        return None
+    return {re.sub(f"-v?{re.escape(version['ref'])}$", "", t["id"]) for t in ts}
+
+
+def build_summary(report: Mapping[str, Any]) -> str:
     short = report["repo"].split("/")[-1]
     columns, seen = [], set()
     for t in report["targets"]:
         if t["id"] not in seen:
             seen.add(t["id"])
             columns.append((target_label(t, short), t["id"]))
-    by_version = rows.by_version
-    version_rows = rows.version_rows
+    source_ids = {t["id"] for t in report["targets"] if t["kind"] == "fs"}
+    versions = report["versions"]
+    day = date.fromisoformat(report["generated_utc"][:10])
+    cutoff = (day - timedelta(14)).isoformat()
+    li = next((i for i, v in enumerate(versions) if v["latest"]), None)
+    newest = versions[li] if li is not None else {"vulns": []}
+    newest_stems = target_stems(report, newest) if li is not None else None
+    # the names of the newest release by class, whatever the package: a renamed
+    # package must not look fixed
+    newest_names = {(r["class"], n) for r in newest["vulns"] for n in r["names"]}
+    version_rows = {}
+    for i, version in enumerate(versions):
+        # "fixed in": absent from the newest release, scanned the same way
+        hint = bool(
+            newest_stems is not None
+            and i > li
+            and version["kind"] != "development"
+            and VERSION.fullmatch(version["ref"])
+            and newest_stems == target_stems(report, version)
+        )
+
+        def note(r: Mapping[str, Any], hint: bool = hint) -> str:
+            marks = []
+            if (r["published"] or "")[:10] >= cutoff:
+                marks.append("new in DB")
+            if r["accepted"]:
+                marks.append(f"accepted until {r['accepted']['until']}")
+            if hint and not any((r["class"], n) in newest_names for n in r["names"]):
+                marks.append(f"fixed in {newest['ref']}")
+            return f" ({', '.join(marks)})" if marks else ""
+
+        fs = [f for f in report["findings"] if f["target"] in version["targets"]]
+        version_rows[version["ref"]] = package_rows(
+            fs, source_ids, version["vulns"], note
+        )
     # a package is one installed version: the rows of the versions, deduplicated
-    # (package_rows over all the findings would merge the OS packages of different
-    # versions, which it keys without the version)
+    # (the first version wins: development, then the newest)
     unique = {
         (r["class"], norm(r["pkg"]), r["version"]): r
         for vrows in reversed(version_rows.values())
         for r in vrows
     }.values()
-    all_rows = rows.all_rows
     lines = header(report) + ["## Vulnerabilities", ""]
-    lines += [*vulnerabilities_table(by_version, version_rows, all_rows), ""]
+    lines += [*vulnerabilities_table(versions), ""]
     lines += ["## Packages to update", ""]
-    lines += [*packages_table(report, by_version, version_rows, [*unique]), ""]
-    for version, _ in by_version:
-        if version_rows[version]:
-            lines += version_section(version, version_rows[version], columns)
+    lines += [*packages_table(report, versions, version_rows, [*unique]), ""]
+    if audit := ignores_audit(report):
+        lines += ["## Ignore file", "", *audit, ""]
+    for v in versions:
+        if version_rows[v["ref"]]:
+            lines += version_section(v["ref"], version_rows[v["ref"]], columns)
     lines += [*results_by_target(report), ""]
     lines += [
         "---",

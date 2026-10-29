@@ -6,7 +6,7 @@ inputs:
     description: Path to targets.json produced by the sca_resolve_targets action
     required: true
   parts-dir:
-    description: Directory with the per-scanner scan parts (<scanner>/<id>.json, <scanner>/<id>.status.json, optional <scanner>/<id>.txt, optional trivy/<id>.gradle-graph/ with the Gradle dependency graph of a source target; trivy and osv)
+    description: Directory with the per-scanner scan parts (<scanner>/<id>.json, <scanner>/<id>.status.json with the ignorefile field of a source target, optional trivy/<id>.trivyignore (the .trivyignore of a source target), optional <scanner>/<id>.txt, optional trivy/<id>.gradle-graph/ with the Gradle dependency graph of a source target; trivy and osv)
     required: true
   output-dir:
     description: Directory to write the report into (summary.md, report.json, _native/<scanner>/)

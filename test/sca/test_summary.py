@@ -5,12 +5,11 @@ import re
 import pytest
 from summary import (
     STEP_SUMMARY_LIMIT_BYTES,
-    build_counts,
     build_summary,
     target_label,
     truncate_summary,
-    versions_of,
 )
+from vulns import build_versions, versions_of
 
 
 def target(
@@ -44,6 +43,10 @@ def finding(
         "scanner": scanner,
         "id": vid,
         "aliases": [],
+        "names": [vid],
+        "published": None,
+        "modified": None,
+        "cvss": None,
         "pkg": pkg,
         "version": "1.3" if cls == "os" else "1.0",
         "ecosystem": "npm",
@@ -61,8 +64,8 @@ def finding(
 
 
 def report(targets, findings):
-    return {
-        "schema_version": 3,
+    doc = {
+        "schema_version": 4,
         "repo": "o/app",
         "commit_sha": "0123456789abcdef",
         "default_branch": "development",
@@ -78,7 +81,11 @@ def report(targets, findings):
         },
         "targets": targets,
         "findings": findings,
+        "ignores": [],
+        "ignores_error": None,
     }
+    doc["versions"] = build_versions(doc, {})
+    return doc
 
 
 def sample():
@@ -312,12 +319,17 @@ def test_findings_sharing_an_alias_are_one_vulnerability_with_the_cve_shown():
     findings = [
         finding(src, "GHSA-x", "lib", fixed="2.0"),
         finding(
-            src, "CVE-2026-9", "lib", scanner="osv", fixed="2.1", aliases=["GHSA-x"]
+            src,
+            "CVE-2026-9",
+            "lib",
+            scanner="osv",
+            fixed="2.1",
+            names=["CVE-2026-9", "GHSA-x"],
         ),
     ]
     text = build_summary(report([target(src), target(src, "osv")], findings))
     assert "1 library, 0 OS packages, 1 fixable" in text
-    assert "CVE-2026-9" in text and "GHSA-x" not in text
+    assert "[CVE-2026-9](" in text and "[GHSA-x]" not in text
 
 
 def test_the_cut_leaves_room_for_every_block_it_closes():
@@ -540,8 +552,10 @@ def test_the_vulnerabilities_table_counts_vulnerabilities_by_their_own_severity(
         finding(src, "CVE-2", "vite", "HIGH"),
         finding(src, "CVE-3", "vite", "LOW", fixed="2"),
         # one vulnerability under two ids, seen by both scanners
-        finding(src, "GHSA-x", "lib", "LOW", scanner="osv", aliases=["CVE-4"]),
-        finding(src, "CVE-4", "lib", "LOW"),
+        finding(
+            src, "GHSA-x", "lib", "LOW", scanner="osv", names=["CVE-4", "GHSA-x"]
+        ),
+        finding(src, "CVE-4", "lib", "LOW", names=["CVE-4"]),
     ]
     text = build_summary(report([target(src, ref="1.0")], findings))
     assert vulns_line(text, "1.0") == "| 1.0 | - | 1 | 1 | 2 | 2 |"
@@ -574,13 +588,255 @@ def test_a_vulnerability_of_an_os_package_in_two_versions_is_one():
     assert vulns_line(text, "**All (unique)**").endswith("| - | 2 | - | - | 1 |")
 
 
-def test_the_last_row_of_the_vulnerabilities_table_is_counts_total_of_report_json():
+def test_version_rows_equal_the_counts_of_the_report_and_a_failed_one_is_partial():
     doc = two_versions()
-    doc["counts"] = build_counts(doc)
-    total = doc["counts"]["total"]
-    row = vulns_line(build_summary(doc), "**All (unique)**").strip("|").split("|")[1:]
-    shown = [c.strip() for c in row]
-    by = total["by_severity"]
-    expected = [by[s]["all"] or "-" for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW")]
-    expected.append(total["fixable"] or "-")
-    assert shown == [str(e) for e in expected]
+    doc["targets"][4]["status"] = "failed"
+    doc["versions"] = build_versions(doc, {})
+    text = build_summary(doc)
+    for v in doc["versions"]:
+        label = v["ref"] + (" (partial)" if v["status"] == "failed" else "")
+        c = v["counts"]
+        shown = vulns_line(text, label).strip("|").split("|")[1:]
+        assert [x.strip() for x in shown] == [
+            str(c[k] or "-") for k in ("c", "h", "m", "l", "fixable")
+        ]
+    assert "| 1.2.9 (partial) |" in text
+    assert "| **All (unique)** (partial) |" in text
+
+
+def test_all_unique_counts_keys_with_the_worst_severity_and_any_fix():
+    targets = [target("s1", ref="2.0"), target("s2", ref="1.0")]
+    findings = [
+        finding("s1", "CVE-1", "lib", "MEDIUM"),
+        finding("s2", "CVE-1", "lib", "CRITICAL", fixed="2"),
+        finding("s2", "CVE-2", "lib", "LOW"),
+    ]
+    text = build_summary(report(targets, findings))
+    assert vulns_line(text, "**All (unique)**") == (
+        "| **All (unique)** | 1 | - | - | 1 | 1 |"
+    )
+
+
+def test_a_row_shows_its_records_not_an_alias_merge():
+    src = "source-1.0"
+    findings = [
+        finding(src, "GHSA-1", "lib"),
+        finding(
+            src, "CVE-X", "lib", scanner="osv", names=["CVE-X", "GHSA-1"], fixed="2"
+        ),
+        # a bundle: the OSV finding names a neighbour CVE, which stays its own entry
+        finding(
+            "app-1.0", "CVE-A", "bash", scanner="osv", cls="os", aliases=["CVE-B"]
+        ),
+        finding("app-1.0", "CVE-B", "bash", cls="os"),
+    ]
+    targets = [target(src, ref="1.0"), target("app-1.0", kind="image", ref="1.0")]
+    text = build_summary(report(targets, findings))
+    row = line(text, "| lib@")
+    assert "[CVE-X](https://example.test/GHSA-1)" in row
+    assert row.count("CVE-X") == 1
+    os_row = line(text, "| bash@")
+    assert "CVE-A" in os_row and "CVE-B" in os_row
+    assert vulns_line(text, "1.0").endswith("| - | 3 | - | - | 1 |")
+
+
+def test_a_row_shows_the_fix_of_its_own_installed_version():
+    # one record spans lib@1.0 and lib@1.1, the fixes differ
+    src = "source-1.0"
+    findings = [
+        finding(src, "CVE-1", "lib", fixed="1.1", version="1.0"),
+        finding(src, "CVE-1", "lib", fixed="1.2", version="1.1"),
+    ]
+    text = build_summary(report([target(src, ref="1.0")], findings))
+    assert line(text, "| lib@1.1 ").startswith("| lib@1.1 | H | 1.2 | [CVE-1]")
+    assert line(text, "| lib@1.0 ").startswith("| lib@1.0 | H | 1.1 | [CVE-1]")
+
+
+def test_a_row_takes_its_severity_from_the_records():
+    findings = [
+        finding("s", "CVE-1", "lib", "MEDIUM"),
+        finding("s", "CVE-1", "lib", "HIGH", scanner="osv"),
+    ]
+    text = build_summary(report([target("s")], findings))
+    assert line(text, "| lib@").startswith("| lib@1.0 | M |")
+
+
+def test_the_header_names_the_engine():
+    doc = report([target("s")], [])
+    assert "engine " not in build_summary(doc)
+    doc["engine"] = "v0.7.0"
+    assert " · engine v0.7.0" in build_summary(doc)
+
+
+def ignore(id, until=None, **flags):
+    return {
+        "id": id,
+        "until": until,
+        "expired": False,
+        "bad_expiry": False,
+        "no_expiry": until is None,
+        "matched": True,
+        **flags,
+    }
+
+
+def test_the_ignores_audit_lists_the_lines_that_need_attention():
+    doc = report([target("s")], [])
+    doc["ignores"] = [
+        ignore("CVE-1", "2026-01-01", expired=True),
+        ignore("CVE-2"),
+        ignore("CVE-3", no_expiry=False, bad_expiry=True),
+        ignore("CVE-4", "2027-01-01", matched=False),
+        ignore("CVE-5", "2027-01-01"),
+    ]
+    audit = table_of(build_summary(doc), "Ignore file")
+    assert "- Expired: CVE-1 (until 2026-01-01)" in audit
+    assert "- Without expiry: CVE-2\n" in audit
+    assert "- With a bad date: CVE-3\n" in audit
+    assert "- Matching nothing: CVE-4 (until 2027-01-01)" in audit
+    assert "CVE-5" not in audit
+
+
+def test_an_unread_ignore_file_is_one_header_line_not_a_section():
+    doc = report([target("s")], [])
+    doc["ignores"], doc["ignores_error"] = None, "checkout failed"
+    text = build_summary(doc)
+    assert "\n- Risk acceptance not applied: checkout failed.\n" in text
+    assert "## Ignore file" not in text
+
+
+def test_a_focus_run_does_not_repeat_the_unread_ignore_file():
+    doc = report([target("s")], [])
+    doc["ignores"], doc["ignores_error"] = None, "no default-branch target in this run"
+    doc["scan_ref"] = "0.22.0"
+    text = build_summary(doc)
+    assert "Risk acceptance" not in text and "Focused on tag" in text
+
+
+def test_the_header_notes_are_separate_list_items():
+    doc = report([target("s", packages=0)], [])
+    doc["scan_ref"] = "0.22.0"
+    notes = [r for r in build_summary(doc).split("\n## ")[0].splitlines() if r[:2] == "- "]
+    assert len(notes) == 2 and "Focused on tag" in notes[0] and "Warning" in notes[1]
+
+
+@pytest.mark.parametrize("ignores", [[], [ignore("CVE-5", "2027-01-01")]])
+def test_a_clean_ignore_file_has_no_audit(ignores):
+    doc = report([target("s")], [])
+    doc["ignores"] = ignores
+    assert "Ignore file" not in build_summary(doc)
+
+
+def test_an_accepted_record_is_marked_with_its_date():
+    doc = report([target("s")], [finding("s", "CVE-1", "lib")])
+    doc["versions"][0]["vulns"][0]["accepted"] = {"until": "2027-01-01"}
+    assert "CVE-1](https://example.test/CVE-1) (accepted until 2027-01-01) |" in (
+        build_summary(doc)
+    )
+
+
+def test_several_marks_share_one_parenthesis():
+    f = finding("s", "CVE-1", "lib", published="2026-10-10")
+    doc = report([target("s")], [f])
+    doc["versions"][0]["vulns"][0]["accepted"] = {"until": "2027-01-01"}
+    mark = "(new in DB, accepted until 2027-01-01)"
+    assert f"CVE-1](https://example.test/CVE-1) {mark}" in build_summary(doc)
+
+
+def test_health_warns_about_an_old_db_and_a_scan_of_no_packages():
+    doc = report([target("s", packages=0)], [])
+    doc["tools"]["trivy_db"] = "2026-10-11T23:00:00Z"
+    text = build_summary(doc)
+    assert "\n- **Warning:** the Trivy DB is 49 h old.\n" in text
+    assert "\n- **Warning:** no packages scanned in s.\n" in text
+    assert "Warning" not in build_summary(report([target("s")], []))
+
+
+def hint_report(
+    old_image="app-1.0", old_status="ok", packages=10, extra=(), v="", rc=False
+):
+    """The newest release 1.1 (a source and an image), an older 1.0 and ``main``
+    (the default branch) with the same targets, CVE-1 in all but the newest."""
+    targets = [
+        target("source-1.1", ref="1.1"),
+        target("app-1.1", kind="image", ref="1.1", packages=packages),
+        target(f"source-{v}1.0", ref=f"{v}1.0"),
+        target(old_image, kind="image", ref="1.0", status=old_status),
+        target("source-main", ref="main"),
+        target("app-main", kind="image", ref="main"),
+    ]
+    findings = [
+        finding(f"source-{v}1.0", "CVE-1", "lib"),
+        finding(old_image, "CVE-1", "lib"),
+        finding("source-main", "CVE-1", "lib"),
+        *(finding("app-1.1", vid, "z", names=names) for vid, names in extra),
+    ]
+    if rc:
+        targets += [
+            target("source-1.1-rc.1", ref="1.1-rc.1"),
+            target("app-1.1-rc.1", kind="image", ref="1.1-rc.1"),
+        ]
+        findings.append(finding("source-1.1-rc.1", "CVE-1", "lib"))
+    doc = report(targets, findings)
+    doc["default_branch"] = "main"
+    doc["versions"] = build_versions(doc, {})
+    return doc
+
+
+def section(text, version):
+    return text.split(f"\n## {version} - ")[1].split("\n## ")[0]
+
+
+def test_a_release_without_the_record_of_the_newest_gets_fixed_in():
+    text = build_summary(hint_report())
+    assert "[CVE-1](https://example.test/CVE-1) (fixed in 1.1) |" in section(text, "1.0")
+    assert "(fixed in" not in section(text, "main")
+
+
+def test_a_target_stem_ignores_a_v_of_the_tag():
+    text = build_summary(hint_report(v="v"))
+    assert "(fixed in 1.1)" in section(text, "1.0")
+
+
+def test_a_candidate_after_the_newest_release_gets_fixed_in():
+    text = build_summary(hint_report(rc=True))
+    assert "(fixed in 1.1)" in section(text, "1.1-rc.1")
+
+
+def test_no_fixed_in_when_the_target_sets_differ():
+    assert "(fixed in" not in build_summary(hint_report("app-other-1.0"))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"old_status": "failed"},
+        {"packages": 0},
+        # present in the newest under another id of the same vulnerability
+        {"extra": [("CVE-9", ["CVE-9", "CVE-1"])]},
+        # a renamed package: the same id on another package of the class
+        {"extra": [("CVE-1", ["CVE-1"])]},
+    ],
+)
+def test_no_fixed_in_when_the_hint_could_mislead(kwargs):
+    assert "(fixed in" not in build_summary(hint_report(**kwargs))
+
+
+@pytest.mark.parametrize(
+    "published, mark",
+    [("2026-10-14", True), ("2026-09-30", True), ("2026-09-29", False), (None, False)],
+)
+def test_a_record_published_within_14_days_is_new(published, mark):
+    f = finding("s", "CVE-1", "lib", published=published)
+    text = build_summary(report([target("s")], [f]))
+    assert ("CVE-1](https://example.test/CVE-1) (new in DB) |" in text) is mark
+    assert ("new in DB: published within 14 days" in text) is mark
+
+
+def test_the_legend_names_accepted_until_when_a_record_is_accepted():
+    f = finding("s", "CVE-1", "lib")
+    doc = report([target("s")], [f])
+    doc["versions"][0]["vulns"][0]["accepted"] = {"until": "2027-01-01"}
+    text = build_summary(doc)
+    assert "CVE-1](https://example.test/CVE-1) (accepted until 2027-01-01) |" in text
+    assert "accepted until D: the default-branch .trivyignore" in text

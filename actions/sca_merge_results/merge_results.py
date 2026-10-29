@@ -6,16 +6,20 @@ Inputs:
     target with the same id);
   * a parts directory with one subdirectory per scanner (``trivy/``, ``osv/``)
     holding, per scanned target id, ``<id>.json`` (native JSON),
-    ``<id>.status.json``, an optional ``<id>.txt`` (table) and, for a Trivy Gradle
+    ``<id>.status.json``, an optional ``<id>.txt`` (table), for a Trivy fs target the
+    repository ``.trivyignore`` as ``<id>.trivyignore`` (``ignorefile`` of its
+    status file says whether it exists) and, for a Trivy Gradle
     build, ``<id>.gradle-graph/`` (the resolved dependency graph, one JSON file per
     Gradle project, written by the generate_gradle_lockfiles action).
 
 Outputs (in the output directory):
-  * ``report.json`` - the targets with their status and the flat list of findings
-    (see ``normalize`` for the rows);
+  * ``report.json`` - the targets with their status, the flat list of findings (see
+    ``normalize`` for the rows) and the versions with their vulnerability records
+    (see ``vulns``);
   * ``summary.md`` - the human-readable layer (see ``summary``), also appended to the
     job summary;
-  * ``_native/<scanner>/<id>.json|txt`` - the unmodified per-target results (audit).
+  * ``_native/<scanner>/<id>.json|txt|trivyignore`` - the unmodified per-target
+    results (audit).
 
 A scan that broke is reported as ``failed`` and never looks like a clean target. The
 script still exits 0 once the outputs are written: the workflow decides about
@@ -34,17 +38,31 @@ from pathlib import Path
 from typing import Any
 
 from _sca_lib import append_text, dump_json, escape_command_data, format_time, read_json
+from ignores import add_ignores
 from normalize import (
     Findings,
     Inventory,
+    PackageSet,
     apply_gradle_graph,
     borrow_source_chains,
     normalize_osv,
     normalize_trivy,
 )
-from summary import build_counts, build_rows, build_summary, truncate_summary
+from summary import build_summary, truncate_summary
+from vulns import build_versions
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+
+def engine_ref(action_path: str | None) -> str | None:
+    """The ref of the action in a runner path ``.../_actions/<owner>/<repo>/<ref>/
+    actions/<action>`` (a branch ref with a slash is nested directories); None
+    outside Actions (a local run).
+    """
+    parts = (action_path or "").replace("\\", "/").split("/")
+    if "_actions" not in parts:
+        return None
+    return "/".join(parts[parts.index("_actions") + 3 : -2]) or None
 
 
 def load_target_result(
@@ -114,6 +132,8 @@ def run_merge(
     output_dir: Path,
     generated_utc: str,
     trivy_db: Mapping[str, str],
+    engine: str | None = None,
+    run_attempt: int | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Write all outputs; return the report and the summary."""
     doc = read_json(targets_file)
@@ -124,7 +144,7 @@ def run_merge(
         parts = parts_dir / scanner
         native_dir = output_dir / "_native" / scanner
         native_dir.mkdir(parents=True, exist_ok=True)
-        for suffix in (".json", ".txt"):
+        for suffix in (".json", ".txt", ".trivyignore"):
             if (parts / f"{tid}{suffix}").is_file():
                 shutil.copyfile(parts / f"{tid}{suffix}", native_dir / f"{tid}{suffix}")
         state, native, status = load_target_result(target, parts)
@@ -143,6 +163,7 @@ def run_merge(
                 **({"image_scan_disabled": True} if target.get("image_scan_disabled") else {}),
                 **state,
                 "packages_scanned": None,
+                **({"os": None} if scanner == "trivy" else {}),
             }
         )
         if native is not None:
@@ -150,6 +171,7 @@ def run_merge(
 
     findings: Findings = {}
     inventories: dict[str, Inventory] = {}
+    package_sets: dict[str, PackageSet] = {}
     tools: dict[str, Any] = {
         "trivy": None,
         "trivy_db": trivy_db.get("vulnerability_db_updated_at"),
@@ -167,7 +189,7 @@ def run_merge(
         inventory: Inventory = {}
         try:
             if scanner == "trivy":
-                normalize_trivy(tid, native, found, inventory)
+                package_sets[tid] = normalize_trivy(tid, native, found, inventory)
             else:
                 normalize_osv(tid, native, found, inventories.get(tid, {}))
             entry["packages_scanned"] = count_packages(scanner, native)
@@ -186,9 +208,16 @@ def run_merge(
             tools["trivy"] = tools["trivy"] or (native.get("Trivy") or {}).get(
                 "Version"
             )
-            digests = (native.get("Metadata") or {}).get("RepoDigests") or []
+            meta = native.get("Metadata") or {}
+            digests = meta.get("RepoDigests") or []
             if digests and entry["kind"] == "image":
                 entry["image_digest"] = digests[0]
+            if (os_ := meta.get("OS")) and entry["kind"] == "image":
+                entry["os"] = {
+                    "family": os_.get("Family"),
+                    "name": os_.get("Name"),
+                    "eosl": bool(os_.get("EOSL")),
+                }
         else:
             tools["osv_scanner"] = tools["osv_scanner"] or status.get("scanner_version")
             times = [tools["osv_queried_at"], status.get("queried_at")]
@@ -203,10 +232,12 @@ def run_merge(
 
     report = {
         "schema_version": SCHEMA_VERSION,
+        "engine": engine,
         "repo": doc["repo"],
         "commit_sha": doc["commit_sha"],
         "default_branch": doc["default_branch"],
         "run_id": doc["run_id"],
+        "run_attempt": run_attempt,
         "run_url": doc["run_url"],
         "generated_utc": generated_utc,
         # event and actor are every-run fields, scan_ref and forced_image_scan are
@@ -222,10 +253,10 @@ def run_merge(
         "targets": entries,
         "findings": list(findings.values()),
     }
-    rows = build_rows(report)
-    report["counts"] = build_counts(report, rows)
+    report["versions"] = build_versions(report, package_sets)
+    add_ignores(report, parts_dir)
     dump_json(output_dir / "report.json", report)
-    summary = build_summary(report, rows)
+    summary = build_summary(report)
     (output_dir / "summary.md").write_text(summary, encoding="utf-8", newline="\n")
     return report, summary
 
@@ -248,12 +279,16 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     trivy_db = json.loads(args.trivy_db_info) if args.trivy_db_info.strip() else {}
+    action_path = os.environ.get("ACTION_PATH")
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
     report, summary = run_merge(
         args.targets_file,
         args.parts_dir,
         args.output_dir,
         format_time(datetime.now(UTC)),
         trivy_db,
+        engine_ref(action_path),
+        int(attempt) if attempt.isdigit() else None,
     )
     failed = [e for e in report["targets"] if e["status"] == "failed"]
     for entry in failed:
