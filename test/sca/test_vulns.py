@@ -2,6 +2,8 @@
 
 import pytest
 from merge_results import engine_ref
+from normalize import norm
+from normalize import norm
 from test_summary import finding, report, sample, target, two_versions
 from vulns import (
     build_versions,
@@ -15,7 +17,7 @@ SEVS = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 
 
 def vulns_of(doc, ref):
-    return next(v for v in build_versions(doc) if v["ref"] == ref)["vulns"]
+    return next(v for v in build_versions(doc, {}) if v["ref"] == ref)["vulns"]
 
 
 def keys(vulns):
@@ -34,7 +36,7 @@ def osv_os(tid, vid, pkg, names=None, **extra):
 
 def test_versions_follow_versions_of_order_and_name():
     rep = two_versions()
-    versions = build_versions(rep)
+    versions = build_versions(rep, {})
     assert [r["ref"] for r in versions] == [v for v, _ in versions_of(rep)]
     assert versions[1]["targets"] == ["app-1.2.9", "app-bff-1.2.9", "source-1.2.9"]
 
@@ -42,7 +44,7 @@ def test_versions_follow_versions_of_order_and_name():
 def test_kind_is_development_candidate_or_release():
     refs = ["development", "0.50.0-rc.1", "1.2.0", "v2.0.0"]
     doc = report([target(f"s{i}", ref=r) for i, r in enumerate(refs)], [])
-    kinds = {r["ref"]: r["kind"] for r in build_versions(doc)}
+    kinds = {r["ref"]: r["kind"] for r in build_versions(doc, {})}
     assert kinds["development"] == "development"
     assert kinds["0.50.0-rc.1"] == "candidate"
     assert kinds["1.2.0"] == "release"
@@ -52,21 +54,21 @@ def test_kind_is_development_candidate_or_release():
 def test_the_default_branch_is_development_kind_even_when_not_named_development():
     doc = report([target("s", ref="main")], [])
     doc["default_branch"] = "main"
-    (record,) = build_versions(doc)
+    (record,) = build_versions(doc, {})
     assert record["kind"] == version_kind("main", "main") == "development"
     assert not is_release("main", "main")
 
 
 def test_exactly_one_latest_the_newest_release():
-    latest = [r for r in build_versions(two_versions()) if r["latest"]]
+    latest = [r for r in build_versions(two_versions(), {}) if r["latest"]]
     assert [r["ref"] for r in latest] == ["1.2.9"]
 
 
 def test_no_latest_without_a_release_and_for_a_non_semver_tag():
     doc = report([target("s0", ref="development"), target("s1", ref="0.1.0-rc.1")], [])
-    assert not any(r["latest"] for r in build_versions(doc))
+    assert not any(r["latest"] for r in build_versions(doc, {}))
     doc = report([target("s0", ref="development"), target("s1", ref="nightly")], [])
-    assert not any(r["latest"] for r in build_versions(doc))
+    assert not any(r["latest"] for r in build_versions(doc, {}))
 
 
 def test_latest_skips_a_failed_release():
@@ -74,7 +76,7 @@ def test_latest_skips_a_failed_release():
         target("source-2.0", ref="2.0", status="failed", reason="x"),
         target("source-1.0", ref="1.0"),
     ]
-    records = {r["ref"]: r for r in build_versions(report(targets, []))}
+    records = {r["ref"]: r for r in build_versions(report(targets, []), {})}
     assert records["2.0"]["latest"] is False and records["1.0"]["latest"] is True
 
 
@@ -82,7 +84,7 @@ def test_latest_skips_a_failed_release():
 
 
 def status_of(*targets):
-    (record,) = build_versions(report(list(targets), []))
+    (record,) = build_versions(report(list(targets), []), {})
     return record["status"]
 
 
@@ -119,7 +121,7 @@ def test_a_failed_version_keeps_the_records_of_its_ok_targets():
         target("img-1.0", kind="image", ref="1.0", status="failed", reason="x"),
     ]
     doc = report(targets, [finding("source-1.0", "CVE-1", "lib", fixed="2")])
-    (record,) = build_versions(doc)
+    (record,) = build_versions(doc, {})
     assert record["status"] == "failed"
     assert record["counts"] == {
         "c": 0,
@@ -134,7 +136,7 @@ def test_a_failed_version_keeps_the_records_of_its_ok_targets():
 
 
 def test_the_sample_versions_with_failed_scans_are_failed():
-    statuses = {r["ref"]: r["status"] for r in build_versions(sample())}
+    statuses = {r["ref"]: r["status"] for r in build_versions(sample(), {})}
     assert statuses["1.0"] == "failed" and statuses["development"] == "ok"
     assert statuses["2.0"] == "ok"  # its only image is not_applicable
 
@@ -344,7 +346,7 @@ def test_the_records_are_sorted_by_class_package_and_id():
 
 
 def test_counts_match_the_records_per_severity():
-    for record in build_versions(two_versions()):
+    for record in build_versions(two_versions(), {}):
         vulns = record["vulns"]
         counts = record["counts"]
         by = [sum(v["severity"] == s for v in vulns) for s in SEVS]
@@ -354,7 +356,7 @@ def test_counts_match_the_records_per_severity():
 
 
 def test_the_counts_of_the_sample_versions_are_pinned():
-    records = {r["ref"]: r for r in build_versions(two_versions())}
+    records = {r["ref"]: r for r in build_versions(two_versions(), {})}
     new, old = records["1.2.9"]["counts"], records["1.1.15"]["counts"]
     assert (new["h"], new["m"], new["fixable"]) == (1, 1, 1)
     assert (old["h"], old["l"]) == (1, 1)
@@ -377,3 +379,225 @@ def test_the_counts_of_the_sample_versions_are_pinned():
 )
 def test_engine_ref(path, ref):
     assert engine_ref(path) == ref
+
+
+# --- record attributes: aliases, ecosystem, relationship, locations ---
+
+
+def record(*fs):
+    (v,) = vulns_of(report([target("s")], list(fs)), "development")
+    return v
+
+
+def test_a_trivy_only_record_takes_the_ecosystem_from_the_type_map():
+    types = [
+        ("python-pkg", "PyPI"),
+        ("poetry", "PyPI"),
+        ("node-pkg", "npm"),
+        ("jar", "Maven"),
+        ("gobinary", "Go"),
+        ("cargo", "crates.io"),
+        ("nuget", "NuGet"),
+        ("conan", None),
+    ]
+    for kind, name in types:
+        row = finding("s", "CVE-1", "lib", ecosystem=kind)
+        assert record(row)["ecosystem"] == name
+    os_row = finding("s", "CVE-1", "lib", cls="os", ecosystem="ubuntu")
+    assert record(os_row)["ecosystem"] is None
+
+
+def test_an_osv_record_keeps_the_osv_ecosystem_and_wins_over_trivy():
+    row = osv_os("s", "CVE-1", "lib", ecosystem="Ubuntu:24.04:LTS")
+    assert record(row)["ecosystem"] == "Ubuntu:24.04:LTS"
+    trivy = finding("s", "CVE-1", "lib", cls="os", ecosystem="ubuntu")
+    assert record(trivy, row)["ecosystem"] == "Ubuntu:24.04:LTS"
+    lang = finding("s", "CVE-1", "lib", ecosystem="python-pkg")
+    osv = finding("s", "CVE-1", "lib", scanner="osv", ecosystem="PyPI")
+    assert record(lang, osv)["ecosystem"] == "PyPI"
+
+
+def test_aliases_and_locations_of_a_record_with_both_scanners():
+    trivy = finding(
+        "s",
+        "GHSA-x",
+        "lib",
+        names=["GHSA-x"],
+        aliases=["VEND-1"],
+        locations=["b/lock.json"],
+    )
+    osv = finding(
+        "s",
+        "CVE-1",
+        "lib",
+        scanner="osv",
+        names=["CVE-1", "GHSA-x"],
+        aliases=["GHSA-x", "PYSEC-1"],
+        locations=["a/lock.json", "b/lock.json"],
+    )
+    v = record(trivy, osv)
+    assert v["id"] == "CVE-1" and "title" not in v and "url" not in v
+    assert v["aliases"] == ["PYSEC-1", "VEND-1"]
+    assert v["locations"] == ["a/lock.json", "b/lock.json"]
+
+
+def test_relationship_direct_wins_over_indirect_then_the_first_known_value():
+    def rel(*values):
+        rows = [
+            finding("s", "CVE-1", "lib", scanner=sc, relationship=r)
+            for sc, r in zip(("trivy", "osv", "osv"), values)
+        ]
+        return record(*rows)["relationship"]
+
+    assert rel("indirect", "direct") == "direct"
+    assert rel(None, "indirect") == "indirect"
+    assert rel("unknown", None) == "unknown"
+    assert rel("odd", "other") == "odd"
+    assert rel(None, None) is None
+
+
+def test_record_key_order():
+    assert list(record(finding("s", "CVE-1", "lib"))) == [
+        "id", "names", "pkg", "class", "severity", "fixed", "dev", "installed",
+        "where", "sources", "published", "modified", "cvss", "aliases", "ecosystem",
+        "relationship", "locations", "accepted",
+    ]  # fmt: skip
+
+
+# --- versions[].packages ---
+
+
+def versions_with(targets, findings, sets):
+    return {v["ref"]: v for v in build_versions(report(targets, findings), sets)}
+
+
+def pkgs(version):
+    keys = ("pkg", "class", "installed", "where")
+    return [tuple(p[k] for k in keys) for p in version["packages"]]
+
+
+def test_a_package_vulnerable_in_one_version_is_listed_in_all_with_what_runs():
+    targets = [target("source-1.0", ref="1.0"), target("source-development")]
+    findings = [finding("source-1.0", "CVE-1", "Lib_X", version="0.3.79")]
+    sets = {
+        "source-1.0": {("lang", "lib-x", "0.3.79"), ("lang", "other", "1")},
+        "source-development": {("lang", "lib-x", "0.3.84"), ("lang", "other", "1")},
+    }
+    got = versions_with(targets, findings, sets)
+    assert pkgs(got["1.0"]) == [("Lib_X", "lang", ["0.3.79"], ["source-1.0"])]
+    assert pkgs(got["development"]) == [
+        ("Lib_X", "lang", ["0.3.84"], ["source-development"])
+    ]
+    assert list(got["1.0"])[-2:] == ["vulns", "packages"]
+
+
+def test_an_absent_package_has_empty_installed_and_where():
+    targets = [target("source-1.0", ref="1.0"), target("source-development")]
+    findings = [finding("source-1.0", "CVE-1", "lib")]
+    got = versions_with(targets, findings, {"source-development": set()})
+    assert pkgs(got["development"]) == [("lib", "lang", [], [])]
+
+
+def test_a_failed_target_contributes_only_its_records():
+    targets = [
+        target("source-1.0", ref="1.0"),
+        target("img-1.0", kind="image", ref="1.0", status="failed", reason="x"),
+    ]
+    sets = {"source-1.0": {("lang", "lib", "1.0")}, "img-1.0": {("lang", "lib", "9")}}
+    findings = [finding("source-1.0", "CVE-1", "lib")]
+    assert pkgs(versions_with(targets, findings, sets)["1.0"]) == [
+        ("lib", "lang", ["1.0"], ["source-1.0"])
+    ]
+
+
+def test_os_packages_osv_only_records_and_sorting():
+    targets = [target("img-1.0", kind="image", ref="1.0")]
+    findings = [
+        osv_os("img-1.0", "CVE-1", "zlib1g", version="1:1.3"),
+        finding("img-1.0", "CVE-2", "b-lib"),
+        finding("img-1.0", "CVE-3", "a-lib", cls="os"),
+    ]
+    sets = {
+        "img-1.0": {
+            ("os", "zlib1g", "1:1.2"),
+            ("lang", "b-lib", "1.0"),
+            ("os", "a-lib", "1.3"),
+        }
+    }
+    assert pkgs(versions_with(targets, findings, sets)["1.0"]) == [
+        ("b-lib", "lang", ["1.0"], ["img-1.0"]),
+        ("a-lib", "os", ["1.3"], ["img-1.0"]),
+        ("zlib1g", "os", ["1:1.2", "1:1.3"], ["img-1.0"]),
+    ]
+    # an OSV-only record named differently from Trivy still shows as present
+    got = versions_with(targets, findings[:1], {"img-1.0": set()})
+    assert pkgs(got["1.0"]) == [("zlib1g", "os", ["1:1.3"], ["img-1.0"])]
+
+
+def test_the_findings_of_a_record_are_the_join_by_class_pkg_and_names():
+    findings = [
+        finding("s", "GHSA-1", "Lib_X", names=["GHSA-1"]),
+        finding("s", "CVE-X", "lib-x", scanner="osv", names=["CVE-X", "GHSA-1"]),
+        finding("s", "CVE-2", "lib-x"),
+        finding("s", "CVE-2", "lib-x", cls="os"),
+    ]
+    doc = report([target("s")], findings)
+    (version,) = build_versions(doc, {})
+    assert len(version["vulns"]) == 3
+    joined = []
+    for v in version["vulns"]:
+        found = [
+            f
+            for f in doc["findings"]
+            if f["target"] in version["targets"]
+            and (f["class"], norm(f["pkg"]), f["id"] in v["names"])
+            == (v["class"], norm(v["pkg"]), True)
+        ]
+        assert found
+        joined += found
+    assert sorted(map(id, joined)) == sorted(map(id, doc["findings"]))
+    merged = next(v for v in version["vulns"] if v["id"] == "CVE-X")
+    assert merged["sources"] == ["trivy", "osv"]
+
+
+def test_run_merge_lists_a_clean_package_of_the_other_version(tmp_path):
+    from test_merge_results import Run, trivy_native
+    from test_merge_results import target as raw_target
+
+    old = raw_target("source-1.0", "trivy")
+    old |= {"git_ref": "1.0"}
+    run = Run(tmp_path, [raw_target("source-development", "trivy"), old])
+    vuln = {"VulnerabilityID": "CVE-1", "PkgName": "lib", "InstalledVersion": "1.0"}
+    package = {"ID": "lib@1.0", "Name": "lib", "Version": "1.0"}
+    clean = {"ID": "lib@2.0", "Name": "lib", "Version": "2.0"}
+    run.part("trivy", "source-1.0", trivy_native([vuln], [package]), {"status": "ok"})
+    run.part("trivy", "source-development", trivy_native((), [clean]), {"status": "ok"})
+    versions = {v["ref"]: v for v in run.merge()[1]["versions"]}
+    assert versions["development"]["vulns"] == []
+    (entry,) = versions["development"]["packages"]
+    assert (entry["pkg"], entry["installed"], entry["where"]) == (
+        "lib",
+        ["2.0"],
+        ["source-development"],
+    )
+
+
+# --- modified and cvss ---
+
+
+def cv(score, vector="v", source="nvd"):
+    return {"score": score, "vector": vector, "source": source}
+
+
+def test_record_modified_is_the_latest_and_cvss_prefers_a_score():
+    trivy = finding("s", "CVE-1", "lib", modified="2026-01-02", cvss=cv(5.3))
+    osv = finding(
+        "s", "CVE-1", "lib", scanner="osv", modified="2026-03-04",
+        cvss=cv(None, "CVSS:3.1/x", "osv"),
+    )  # fmt: skip
+    assert record(osv, trivy)["modified"] == "2026-03-04"
+    assert record(trivy, osv)["cvss"] == cv(5.3)
+    assert record(osv, trivy)["cvss"] == cv(5.3)  # the scored one, not the first
+    assert record(osv)["cvss"] == cv(None, "CVSS:3.1/x", "osv")
+    bare = record(finding("s", "CVE-2", "lib"))
+    assert (bare["modified"], bare["cvss"]) == (None, None)

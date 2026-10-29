@@ -45,6 +45,8 @@ def finding(
         "aliases": [],
         "names": [vid],
         "published": None,
+        "modified": None,
+        "cvss": None,
         "pkg": pkg,
         "version": "1.3" if cls == "os" else "1.0",
         "ecosystem": "npm",
@@ -82,7 +84,7 @@ def report(targets, findings):
         "ignores": [],
         "ignores_error": None,
     }
-    doc["versions"] = build_versions(doc)
+    doc["versions"] = build_versions(doc, {})
     return doc
 
 
@@ -589,7 +591,7 @@ def test_a_vulnerability_of_an_os_package_in_two_versions_is_one():
 def test_version_rows_equal_the_counts_of_the_report_and_a_failed_one_is_partial():
     doc = two_versions()
     doc["targets"][4]["status"] = "failed"
-    doc["versions"] = build_versions(doc)
+    doc["versions"] = build_versions(doc, {})
     text = build_summary(doc)
     for v in doc["versions"]:
         label = v["ref"] + (" (partial)" if v["status"] == "failed" else "")
@@ -777,7 +779,7 @@ def hint_report(
         findings.append(finding("source-1.1-rc.1", "CVE-1", "lib"))
     doc = report(targets, findings)
     doc["default_branch"] = "main"
-    doc["versions"] = build_versions(doc)
+    doc["versions"] = build_versions(doc, {})
     return doc
 
 

@@ -11,11 +11,20 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from normalize import SEVERITIES, norm
+from normalize import SEVERITIES, PackageSet, norm
 
 Finding = Mapping[str, Any]
 
 COUNT_KEYS = dict(zip(SEVERITIES, ("c", "h", "m", "l", "unknown")))
+# Trivy result type -> OSV ecosystem name
+OSV_ECOSYSTEMS = {
+    **dict.fromkeys(("pip", "pipenv", "poetry", "uv", "python-pkg"), "PyPI"),
+    **dict.fromkeys(("npm", "yarn", "pnpm", "node-pkg"), "npm"),
+    **dict.fromkeys(("jar", "pom", "gradle"), "Maven"),
+    **dict.fromkeys(("gomod", "gobinary"), "Go"),
+    "cargo": "crates.io",
+    "nuget": "NuGet",
+}
 VERSION = re.compile(r"(\d+(?:\.\d+)*)(-.+)?")
 
 
@@ -94,6 +103,34 @@ def pkg_of(fs: Sequence[Finding], source_ids: set[str]) -> str:
     return next((f for f in fs if f["target"] in source_ids), fs[0])["pkg"]
 
 
+def ecosystem_of(fs: Sequence[Finding]) -> str | None:
+    """The OSV ecosystem name: the one of an OSV finding, else the mapped Trivy type
+    of a language finding, else None.
+    """
+    if osv := next((f for f in fs if f["scanner"] == "osv"), None):
+        return osv["ecosystem"]
+    if fs[0]["class"] == "lang":
+        return OSV_ECOSYSTEMS.get(fs[0]["ecosystem"])
+    return None
+
+
+def relationship_of(fs: Sequence[Finding]) -> str | None:
+    """``direct`` wins over ``indirect``, then the first known value."""
+    found = [f["relationship"] for f in fs if f["relationship"]]
+    for kind in ("direct", "indirect"):
+        if kind in found:
+            return kind
+    return found[0] if found else None
+
+
+def cvss_of(fs: Sequence[Finding]) -> dict[str, Any] | None:
+    """The CVSS of the first finding that has a score, else of the first that has
+    one at all (a vector without a score comes from OSV)."""
+    found = [f["cvss"] for f in fs if f["cvss"]]
+    scored = [c for c in found if c["score"] is not None]
+    return (scored or found or [None])[0]
+
+
 def record_of(fs: Sequence[Finding], source_ids: set[str]) -> dict[str, Any]:
     """The vulnerability record of one component of findings (Trivy first, then OSV,
     each by target and id).
@@ -117,6 +154,12 @@ def record_of(fs: Sequence[Finding], source_ids: set[str]) -> dict[str, Any]:
         "where": sorted({f["target"] for f in fs}),
         "sources": [s for s in ("trivy", "osv") if any(f["scanner"] == s for f in fs)],
         "published": min(dates, default=None),
+        "modified": max((f["modified"] for f in fs if f["modified"]), default=None),
+        "cvss": cvss_of(fs),
+        "aliases": sorted({a for f in fs for a in f["aliases"]} - names),
+        "ecosystem": ecosystem_of(fs),
+        "relationship": relationship_of(fs),
+        "locations": sorted({loc for f in fs for loc in f["locations"]}),
         "accepted": None,
     }
 
@@ -130,12 +173,48 @@ def counts_of(vulns: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     }
 
 
-def build_versions(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+def packages_of(
+    ids: set[str],
+    vulns: Sequence[Mapping[str, Any]],
+    keys: Mapping[tuple[str, str], str],
+    package_sets: Mapping[str, PackageSet],
+    ok: set[str],
+) -> list[dict[str, Any]]:
+    """The ``packages`` of one version: per package of ``keys`` the versions installed
+    in its targets and the targets. Trivy packages of ``ok`` targets (vulnerable or
+    not) and the records of the version itself are the sources.
+    """
+    seen: dict[tuple[str, str], tuple[set[str], set[str]]]
+    seen = {k: (set(), set()) for k in keys}
+    for tid in ids & ok:
+        for cls, name, installed in package_sets.get(tid, ()):
+            if (cls, name) in seen:
+                seen[cls, name][0].add(installed)
+                seen[cls, name][1].add(tid)
+    for v in vulns:
+        installed, where = seen[v["class"], norm(v["pkg"])]
+        installed.update(v["installed"])
+        where.update(v["where"])
+    return [
+        {
+            "pkg": keys[k],
+            "class": k[0],
+            "installed": sorted(installed),
+            "where": sorted(where),
+        }
+        for k, (installed, where) in sorted(seen.items())
+    ]
+
+
+def build_versions(
+    report: Mapping[str, Any], package_sets: Mapping[str, PackageSet]
+) -> list[dict[str, Any]]:
     """One record per version of ``versions_of``, in that order: ``status`` (failed
     when a Trivy or an OSV scan of a target failed; a ``not_applicable`` target does
     not fail it), ``kind``, ``latest`` (the newest ``ok`` release), ``targets``, the
-    ``vulns`` merged over the targets and scanners, and their ``counts``. A failed
-    version keeps what its ``ok`` targets found.
+    ``vulns`` merged over the targets and scanners, and their ``counts``, then the
+    ``packages`` (see ``packages_of``) of every package that has a record in any
+    version. A failed version keeps what its ``ok`` targets found.
     """
     default_branch = report["default_branch"]
     source_ids = {t["id"] for t in report["targets"] if t["kind"] == "fs"}
@@ -175,6 +254,20 @@ def build_versions(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "counts": counts_of(vulns),
                 "vulns": vulns,
             }
+        )
+    # the package spelling of the first version that has a record for it
+    keys: dict[tuple[str, str], str] = {}
+    for version in result:
+        for v in version["vulns"]:
+            keys.setdefault((v["class"], norm(v["pkg"])), v["pkg"])
+    ok = {
+        t["id"]
+        for t in report["targets"]
+        if t["scanner"] == "trivy" and t["status"] == "ok"
+    }
+    for version in result:
+        version["packages"] = packages_of(
+            set(version["targets"]), version["vulns"], keys, package_sets, ok
         )
     ok_releases = (
         v

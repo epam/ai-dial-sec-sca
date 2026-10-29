@@ -42,6 +42,7 @@ from ignores import add_ignores
 from normalize import (
     Findings,
     Inventory,
+    PackageSet,
     apply_gradle_graph,
     borrow_source_chains,
     normalize_osv,
@@ -162,6 +163,7 @@ def run_merge(
                 **({"image_scan_disabled": True} if target.get("image_scan_disabled") else {}),
                 **state,
                 "packages_scanned": None,
+                **({"os": None} if scanner == "trivy" else {}),
             }
         )
         if native is not None:
@@ -169,6 +171,7 @@ def run_merge(
 
     findings: Findings = {}
     inventories: dict[str, Inventory] = {}
+    package_sets: dict[str, PackageSet] = {}
     tools: dict[str, Any] = {
         "trivy": None,
         "trivy_db": trivy_db.get("vulnerability_db_updated_at"),
@@ -186,7 +189,7 @@ def run_merge(
         inventory: Inventory = {}
         try:
             if scanner == "trivy":
-                normalize_trivy(tid, native, found, inventory)
+                package_sets[tid] = normalize_trivy(tid, native, found, inventory)
             else:
                 normalize_osv(tid, native, found, inventories.get(tid, {}))
             entry["packages_scanned"] = count_packages(scanner, native)
@@ -205,9 +208,16 @@ def run_merge(
             tools["trivy"] = tools["trivy"] or (native.get("Trivy") or {}).get(
                 "Version"
             )
-            digests = (native.get("Metadata") or {}).get("RepoDigests") or []
+            meta = native.get("Metadata") or {}
+            digests = meta.get("RepoDigests") or []
             if digests and entry["kind"] == "image":
                 entry["image_digest"] = digests[0]
+            if (os_ := meta.get("OS")) and entry["kind"] == "image":
+                entry["os"] = {
+                    "family": os_.get("Family"),
+                    "name": os_.get("Name"),
+                    "eosl": bool(os_.get("EOSL")),
+                }
         else:
             tools["osv_scanner"] = tools["osv_scanner"] or status.get("scanner_version")
             times = [tools["osv_queried_at"], status.get("queried_at")]
@@ -243,7 +253,7 @@ def run_merge(
         "targets": entries,
         "findings": list(findings.values()),
     }
-    report["versions"] = build_versions(report)
+    report["versions"] = build_versions(report, package_sets)
     add_ignores(report, parts_dir)
     dump_json(output_dir / "report.json", report)
     summary = build_summary(report)

@@ -618,3 +618,111 @@ def test_osv_os_severity_is_the_ubuntu_priority_never_the_cvss_bucket():
         "LOW",
         "UNKNOWN",
     )
+
+
+def test_normalize_trivy_returns_every_package_of_both_classes():
+    os_result = {
+        "Target": "ubuntu",
+        "Type": "ubuntu",
+        "Class": "os-pkgs",
+        "Packages": [
+            {"Name": "bsdutils", "Version": "2.39", "Release": "9u1", "Epoch": 1},
+            {"Name": "musl", "Version": "1.2"},
+        ],
+    }
+    lang = result([{"ID": "a@1", "Name": "A_b", "Version": "1"}])
+    seen = normalize_trivy("t", {"Results": [lang, os_result]}, {}, {})
+    assert seen == {
+        ("lang", "a-b", "1"),
+        ("os", "bsdutils", "1:2.39-9u1"),
+        ("os", "musl", "1.2"),
+    }
+
+
+def cvss_of(cvss, **extra):
+    rows, _ = trivy(result([package("lib")], [vuln("lib", CVSS=cvss, **extra)]))
+    return rows[0]["cvss"]
+
+
+def test_trivy_cvss_vendor_priority_and_v3_before_v4():
+    v3 = {"V3Score": 7.5, "V3Vector": "CVSS:3.1/a"}
+    v4 = {"V40Score": 8.1, "V40Vector": "CVSS:4.0/b"}
+    got = cvss_of({"redhat": v3, "ghsa": v3, "nvd": v3, "zeta": v3})
+    assert got == {"score": 7.5, "vector": "CVSS:3.1/a", "source": "nvd"}
+    assert cvss_of({"redhat": v3, "zeta": v3})["source"] == "redhat"
+    assert cvss_of({"zeta": v3, "alpha": v3})["source"] == "alpha"
+    # a v3 of a lower-priority vendor beats the v4 of nvd
+    assert cvss_of({"nvd": v4, "redhat": v3})["source"] == "redhat"
+    assert cvss_of({"nvd": v4}) == {
+        "score": 8.1,
+        "vector": "CVSS:4.0/b",
+        "source": "nvd",
+    }
+    assert cvss_of({"nvd": {"V2Score": 5.0, "V2Vector": "AV:N"}}) is None
+    assert cvss_of({}) is None
+
+
+def test_trivy_modified_is_the_date_of_last_modified():
+    stamp = "2026-08-31T18:17:13.083Z"
+    rows, _ = trivy(result([package("lib")], [vuln("lib", LastModifiedDate=stamp)]))
+    assert rows[0]["modified"] == "2026-08-31"
+    rows, _ = trivy(result([package("lib")], [vuln("lib")]))
+    assert rows[0]["modified"] is None
+
+
+def test_osv_cvss_is_a_vector_without_a_score_and_modified_is_the_latest():
+    native = osv_native()
+    entry = native["results"][0]["packages"][0]
+    entry["vulnerabilities"][0] |= {
+        "modified": "2026-05-01T00:00:00Z",
+        "severity": [
+            {"type": "CVSS_V4", "score": "CVSS:4.0/z"},
+            {"type": "CVSS_V3", "score": "CVSS:3.1/y"},
+        ],
+    }
+    findings = {}
+    normalize_osv("t", native, findings, {})
+    (row,) = findings.values()
+    assert row["cvss"] == {"score": None, "vector": "CVSS:3.1/y", "source": "osv"}
+    assert row["modified"] == "2026-05-01"
+    v4 = [{"type": "CVSS_V4", "score": "CVSS:4.0/z"}]
+    entry["vulnerabilities"][0]["severity"] = v4
+    findings = {}
+    normalize_osv("t", native, findings, {})
+    assert next(iter(findings.values()))["cvss"]["vector"] == "CVSS:4.0/z"
+    entry["vulnerabilities"][0].pop("severity")
+    findings = {}
+    normalize_osv("t", native, findings, {})
+    assert next(iter(findings.values()))["cvss"] is None
+
+
+def test_lang_cvss_comes_from_the_member_that_gives_the_rating():
+    native = osv_native(group_ids=("GHSA-aaaa", "PYSEC-1"), severity="HIGH")
+    entry = native["results"][0]["packages"][0]
+    first, rated = entry["vulnerabilities"][0], {**entry["vulnerabilities"][0]}
+    first["database_specific"] = {}
+    first["severity"] = [{"type": "CVSS_V3", "score": "CVSS:3.1/plain"}]
+    rated |= {"id": "PYSEC-1", "database_specific": {"severity": "HIGH"}}
+    rated["severity"] = [{"type": "CVSS_V3", "score": "CVSS:3.1/rated"}]
+    entry["vulnerabilities"] = [first, rated]
+    findings = {}
+    normalize_osv("t", native, findings, {})
+    (row,) = findings.values()
+    assert row["severity"] == "HIGH" and row["cvss"]["vector"] == "CVSS:3.1/rated"
+
+
+def test_os_bundle_cves_take_the_vector_of_their_own_record():
+    native = osv_image_native()
+    entry = native["results"][0]["packages"][0]
+    first = entry["vulnerabilities"][0]
+    second = {**first, "id": "ALPINE-CVE-2026-2"}
+    first["severity"] = [{"type": "CVSS_V3", "score": "CVSS:3.1/one"}]
+    second["severity"] = [{"type": "CVSS_V3", "score": "CVSS:3.1/two"}]
+    entry["vulnerabilities"].append(second)
+    ids = ["ALPINE-CVE-2026-1", "ALPINE-CVE-2026-2"]
+    entry["groups"] = [{"ids": ids, "aliases": []}]
+    findings = {}
+    normalize_osv("app-development", native, findings, {})
+    rows = [r for r in findings.values() if r["class"] == "os"]
+    vectors = {r["id"]: r["cvss"]["vector"] for r in rows}
+    assert vectors == {"CVE-2026-1": "CVSS:3.1/one", "CVE-2026-2": "CVSS:3.1/two"}

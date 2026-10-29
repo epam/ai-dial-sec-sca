@@ -19,8 +19,12 @@ from _sca_lib import read_json
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
-def parse_line(line: str, today: str) -> dict[str, Any] | None:
-    """One ``ignores[]`` entry, None for a blank line or a comment."""
+def parse_line(
+    line: str, today: str, reason: str | None = None
+) -> dict[str, Any] | None:
+    """One ``ignores[]`` entry, None for a blank line or a comment. ``reason`` is
+    the comment block above the line; it never acts.
+    """
     fields = line.split()
     if not fields or fields[0].startswith("#"):
         return None
@@ -39,6 +43,7 @@ def parse_line(line: str, today: str) -> dict[str, Any] | None:
         "bad_expiry": exp is not None and until is None,
         "no_expiry": exp is None,
         "matched": False,
+        "reason": reason,
     }
 
 
@@ -82,8 +87,17 @@ def read_ignores(
     except OSError as e:
         return None, f"the ignore file of {tid} is unreadable: {e.strerror}"
     today = report["generated_utc"][:10]
-    parsed = (parse_line(line, today) for line in text.split("\n"))
-    return [e for e in parsed if e], None
+    entries: list[dict[str, Any]] = []
+    block: list[str] = []
+    for line in text.split("\n"):
+        if line.strip().startswith("#"):
+            block.append(line.strip().lstrip("#").strip())
+            continue
+        reason = " ".join(filter(None, block)) or None
+        if entry := parse_line(line, today, reason):
+            entries.append(entry)
+        block = []  # an ignore line or a blank line ends the block
+    return entries, None
 
 
 def add_ignores(report: dict[str, Any], parts_dir: Path) -> None:

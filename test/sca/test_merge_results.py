@@ -144,6 +144,7 @@ def test_report_has_targets_tools_and_one_finding_per_scanner_and_vulnerability(
         "status": "ok",
         "reason": None,
         "packages_scanned": 1,
+        "os": None,
     }
     assert [(f["scanner"], f["id"], f["aliases"]) for f in report["findings"]] == [
         ("trivy", "CVE-2026-1", []),
@@ -161,6 +162,43 @@ def test_image_digest_is_taken_from_the_native_result(tmp_path):
     run.part("trivy", "app-development", trivy_native(), {"status": "ok"})
     digest = entry(run.merge()[1], "app-development")["image_digest"]
     assert digest == "ghcr.io/o/app@sha256:abc"
+
+
+def test_trivy_image_targets_carry_the_os_of_the_native_result(tmp_path):
+    targets = [
+        target("a-development", "trivy", "image"),
+        target("a-1.0", "trivy", "image"),
+        target("a-2.0", "trivy", "image", "failed", "x"),
+        target("a-3.0", "trivy", "image", "not_applicable", "x"),
+        target("source-development", "trivy"),
+        target("a-development", "osv", "image"),
+    ]
+    run = Run(tmp_path, targets)
+    eol = trivy_native()
+    eol["Metadata"]["OS"] = {"Family": "debian", "Name": "9", "EOSL": True}
+    live = trivy_native()
+    live["Metadata"]["OS"] = {"Family": "alpine", "Name": "3.24.2"}
+    source = trivy_native()
+    source["Metadata"]["OS"] = {"Family": "ignored", "Name": "x"}
+    run.part("trivy", "a-development", live, {"status": "ok"})
+    run.part("trivy", "a-1.0", eol, {"status": "ok"})
+    run.part("trivy", "a-2.0", None, {"status": "failed", "reason": "x"})
+    run.part("trivy", "source-development", source, {"status": "ok"})
+    report = run.merge()[1]
+    assert entry(report, "a-development")["os"] == {
+        "family": "alpine",
+        "name": "3.24.2",
+        "eosl": False,
+    }
+    assert entry(report, "a-1.0")["os"] == {
+        "family": "debian",
+        "name": "9",
+        "eosl": True,
+    }
+    for tid in ("a-2.0", "a-3.0", "source-development"):
+        assert entry(report, tid)["os"] is None
+    (osv,) = (t for t in report["targets"] if t["scanner"] == "osv")
+    assert "os" not in osv
 
 
 @pytest.mark.parametrize(

@@ -22,12 +22,15 @@ from _sca_lib import escape_command_data, read_json
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 OSV_URL = "https://osv.dev/vulnerability/"
+CVSS_VENDORS = {"nvd": 0, "ghsa": 1, "redhat": 2}
 
 Finding = dict[str, Any]
 # (target id, scanner, class, id, normalized package name, version) -> finding
 Findings = dict[tuple[str, str, str, str, str, str], Finding]
 # (normalized package name, version) -> {chain, relationship, dev, locations}
 Inventory = dict[tuple[str, str], dict[str, Any]]
+# (class, normalized package name, installed version) of every package of a target
+PackageSet = set[tuple[str, str, str]]
 
 
 def no_graph() -> dict[str, Any]:
@@ -157,16 +160,24 @@ def package_graph_info(
 
 def normalize_trivy(
     tid: str, native: Mapping[str, Any], findings: Findings, inventory: Inventory
-) -> None:
+) -> PackageSet:
     """The vulnerabilities of a Trivy result as findings; every language package
     (vulnerable or not) goes into ``inventory`` for the OSV findings and the images.
+    Returns every package of the result, language and OS, as ``(class, name,
+    version)`` (the version as the findings spell it).
     """
+    seen: PackageSet = set()
     for result in native.get("Results") or []:
         lang = result.get("Class") != "os-pkgs"
         packages = {
             p.get("ID") or f"{p['Name']}@{p.get('Version')}": p
             for p in result.get("Packages") or []
         }
+        for package in packages.values():
+            epoch, release = package.get("Epoch"), package.get("Release")
+            version = f"{epoch}:" * bool(epoch) + (package.get("Version") or "")
+            version += f"-{release}" * bool(release)
+            seen.add(("lang" if lang else "os", norm(package["Name"]), version))
         parents: dict[str, list[str]] = {}
         for pid, package in packages.items():
             for dep in package.get("DependsOn") or []:
@@ -197,6 +208,8 @@ def normalize_trivy(
                     "aliases": [i for i in vuln.get("VendorIDs") or [] if i != vid],
                     "names": [vid],
                     "published": (vuln.get("PublishedDate") or "")[:10] or None,
+                    "modified": (vuln.get("LastModifiedDate") or "")[:10] or None,
+                    "cvss": trivy_cvss(vuln.get("CVSS") or {}),
                     "pkg": name,
                     "version": version,
                     "ecosystem": result["Type"],
@@ -213,6 +226,7 @@ def normalize_trivy(
                     "url": vuln.get("PrimaryURL", ""),
                 },
             )
+    return seen
 
 
 # ---------------------------------------------------------------- OSV
@@ -234,6 +248,32 @@ NAME_PREFIXES = ("CVE-", "GHSA-", "PYSEC-", "GO-", "RUSTSEC-")
 OWN_CVE = re.compile(r"(?:[A-Z]+-)?(CVE-\d+-\d+)")
 
 
+def trivy_cvss(cvss: Mapping[str, Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The CVSS of a Trivy vulnerability: the first vendor (nvd, ghsa, redhat, then
+    by name) with a v3 score or vector, else the first with v4. V2 is ignored."""
+    vendors = sorted(cvss, key=lambda v: (CVSS_VENDORS.get(v, len(CVSS_VENDORS)), v))
+    for version in ("V3", "V40"):
+        for vendor in vendors:
+            score = cvss[vendor].get(version + "Score")
+            vector = cvss[vendor].get(version + "Vector")
+            if score is not None or vector:
+                return {"score": score, "vector": vector, "source": vendor}
+    return None
+
+
+def osv_cvss(records: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The first CVSS_V3 vector of the records (the member that gives the rating
+    first), else the first CVSS_V4 (no score: the engine has no calculator)."""
+    records = sorted(
+        records, key=lambda v: not (v.get("database_specific") or {}).get("severity")
+    )
+    ratings = [r for v in records for r in v.get("severity") or []]
+    for kind in ("CVSS_V3", "CVSS_V4"):
+        if vector := next((r["score"] for r in ratings if r.get("type") == kind), None):
+            return {"score": None, "vector": vector, "source": "osv"}
+    return None
+
+
 def names_of(vid: str, ids: Sequence[str]) -> list[str]:
     """The id first, then the other names of the vulnerability (the CVE, GHSA,
     PYSEC, GO and RUSTSEC ids among ``ids``) in string order."""
@@ -244,6 +284,12 @@ def earliest(records: Sequence[Mapping[str, Any]]) -> str | None:
     """The first ``published`` date (``YYYY-MM-DD``) of the records, if any."""
     dates = [r["published"][:10] for r in records if r.get("published")]
     return min(dates, default=None)
+
+
+def latest(records: Sequence[Mapping[str, Any]]) -> str | None:
+    """The last ``modified`` date (``YYYY-MM-DD``) of the records, if any."""
+    dates = [r["modified"][:10] for r in records if r.get("modified")]
+    return max(dates, default=None)
 
 
 def ubuntu_priority(record: Mapping[str, Any]) -> str:
@@ -358,6 +404,8 @@ def normalize_osv(
                             "aliases": [i for i in aliases if i != vid],
                             "names": names,
                             "published": earliest(records),
+                            "modified": latest(records),
+                            "cvss": osv_cvss(records),
                             "pkg": pkg,
                             "version": version,
                             "ecosystem": package["ecosystem"],

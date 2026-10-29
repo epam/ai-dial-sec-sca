@@ -13,6 +13,7 @@ VULN = {
     "Severity": "HIGH",
 }
 SRC = "source-development"
+NONE = {"reason": None}
 
 
 def merge(tmp_path, ignorefile="present", text=None, status="ok"):
@@ -107,8 +108,8 @@ def test_present_file_is_parsed_accepted_and_copied(tmp_path):
     run, report = merge(tmp_path, "present", text)
     flags = {"bad_expiry": False, "no_expiry": False, "expired": False}
     assert report["ignores"] == [
-        {"id": "CVE-2026-1", "until": "2026-12-31", **flags, "matched": True},
-        {"id": "CVE-9", "until": "2027-01-01", **flags, "matched": False},
+        {"id": "CVE-2026-1", "until": "2026-12-31", **flags, "matched": True} | NONE,
+        {"id": "CVE-9", "until": "2027-01-01", **flags, "matched": False} | NONE,
     ]
     assert accepted(report) == {"until": "2026-12-31"}
     assert (run.out / "_native/trivy" / f"{SRC}.trivyignore").is_file()
@@ -235,3 +236,47 @@ def test_matched_counts_a_record_of_any_version(tmp_path):
     add_ignores(report, tmp_path)
     assert report["ignores"][0]["matched"]
     assert report["versions"][1]["vulns"][0]["accepted"] == {"until": "2027-01-01"}
+
+
+def reasons(tmp_path, text):
+    return [(e["id"], e["reason"]) for e in add(tmp_path, text)["ignores"]]
+
+
+def test_reason_is_the_comment_block_above_the_line(tmp_path):
+    text = "# postponed: waiting\n  #  for the vendor \n#\n#### fix in Q4\n"
+    assert reasons(tmp_path, text + "CVE-1 exp:2027-01-01\n") == [
+        ("CVE-1", "postponed: waiting for the vendor fix in Q4")
+    ]
+
+
+def test_a_blank_line_or_an_ignore_line_ends_the_block(tmp_path):
+    text = "# lost\n\nCVE-1\n# own\nCVE-2\nCVE-3\n# trailing\n"
+    assert reasons(tmp_path, text) == [
+        ("CVE-1", None),
+        ("CVE-2", "own"),
+        ("CVE-3", None),
+    ]
+
+
+def test_the_comment_above_a_bad_or_missing_expiry_is_its_reason(tmp_path):
+    report = add(tmp_path, "# why\nCVE-1 exp:soon\n# also\nCVE-2\n")
+    got = [(e["bad_expiry"], e["no_expiry"], e["reason"]) for e in report["ignores"]]
+    assert got == [(True, False, "why"), (False, True, "also")]
+
+
+def test_a_comment_never_acts(tmp_path):
+    report = add(tmp_path, "# CVE-1 exp:2027-01-01\n")
+    assert report["ignores"] == [] and accepted_of(report) == [None]
+
+
+def test_crlf_lines_and_comments(tmp_path):
+    report = add(tmp_path, "")
+    ignorefile = tmp_path / "trivy" / f"{SRC}.trivyignore"
+    ignorefile.write_bytes(b"# why\r\n#  more\r\nCVE-1 exp:2027-01-01\r\n")
+    add_ignores(report, tmp_path)
+    (entry,) = report["ignores"]
+    assert (entry["id"], entry["until"], entry["reason"]) == (
+        "CVE-1",
+        "2027-01-01",
+        "why more",
+    )
