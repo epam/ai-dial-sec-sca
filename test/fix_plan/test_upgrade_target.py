@@ -221,3 +221,22 @@ def test_c12_pins_the_spelling_of_the_installed_version() -> None:
         for t in item["targets"]
     ]
     assert targets and set(targets) == {"26.2.0"}
+
+
+def test_calendar_version_year_is_not_a_major() -> None:
+    rec = record("certifi", "2024.8.30", "2026.10.18")
+    assert upgrade_target("2024.8.30", [rec]) == (
+        "2026.10.18",
+        "lowest fixed version in the same major",
+        None,
+    )
+
+
+def test_semver_to_calendar_is_a_scheme_change() -> None:
+    rec = record("lib", "3.2.0", "2024.1")
+    assert upgrade_target("3.2.0", [rec])[2] == "needs_major"
+
+
+def test_two_digit_year_keeps_the_semver_major() -> None:
+    rec = record("pip", "24.0", "25.0")
+    assert upgrade_target("24.0", [rec])[2] == "needs_major"

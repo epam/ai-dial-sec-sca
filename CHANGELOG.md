@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Calendar versions (the first component has four digits or more, for example `2024.8.30`) have no major: a newer year is a normal upgrade, not `needs_major`. Two-digit years (`24.1`) keep the semver major.
 - `upgrades`: with development evidence (development fixes every record of the package that contains the installed version) every record of the package gets the group's target; without it a record with no fixed version above the installed version has `no_fixed_version`. It is the package-wide fact over all records with `allow-major` none; the plan can differ. Computed once per package and installed version (a package with 1000 records takes well under a second).
 
 - The target rule: a target taken from the fixed versions must not be vulnerable to any other record of the package (it is at or above the highest fixed version of each record, at or above a fixed version of its own major.minor, or at or above the highest fixed version of its own major, so a record with one fix per major does not block a valid target of the major); a development version is the target as before; versions that compare equal (`1.2`, `1.2.0`) are chosen by the spelling with as many components as the installed version, then by text, the same on every run. The plan can differ from v0.8.0 for a package whose records are fixed on different branches.

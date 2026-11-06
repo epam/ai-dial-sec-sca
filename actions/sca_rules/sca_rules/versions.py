@@ -112,9 +112,14 @@ def compare(left: str, right: str) -> int:
 
 def major(version: str) -> tuple[int, ...]:
     """The major as a version scheme sees it: the first numeric component, or the
-    first two when it is 0 (``0.3.x`` and ``0.4.x`` are different majors).
+    first two when it is 0 (``0.3.x`` and ``0.4.x`` are different majors). A calendar
+    version (the first component is a full year: four digits or more, which no semver
+    major has) has no major: all calendar versions share the empty major ``()``, so a
+    newer year is not a major step. A two-digit year (``24.1``) keeps the semver rule.
     """
     release = release_part(version)
+    if release[0] >= 1000:
+        return ()
     if release[0] != 0:
         return release[:1]
     return (release + (0,))[:2]
