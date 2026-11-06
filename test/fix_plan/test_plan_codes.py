@@ -159,7 +159,8 @@ def test_n9_2_method_failures() -> None:
         in_image,
         targets=[target("image-app-1.2.3", "image", "app"), target("source-1.2.3")],
     )
-    assert only(plan(development(), rel))["reason_code"] == "only_in_image"
+    dev = development(targets=[target(DEV_SOURCE), target("image-dev", "image", "app")])
+    assert only(plan(dev, rel))["reason_code"] == "only_in_image"
     assert only(plan(os_dev(), os_release()), "zlib")["reason_code"] == (
         "needs_image_rebuild"
     )

@@ -137,3 +137,27 @@ def test_agrees_with_build_plan_on_real_fixtures(case: str, allow_major: str) ->
 
 def test_real_fixtures_give_targets_to_compare() -> None:
     assert sum(compare_with_plan(c, "dev-proven") for c in CASES) >= 10
+
+
+def test_rv1_a_candidate_must_be_safe_for_every_record() -> None:
+    # A is fixed on two branches, B in 2.20.0: 2.20.0 is still vulnerable to A
+    a = record("lib", "2.18.0", "2.18.11, 2.21.3", id="A")
+    b = record("lib", "2.18.0", "2.20.0", id="B")
+    assert upgrade_target("2.18.0", [a, b])[0] == "2.21.3"
+    assert upgrade_target("2.18.0", [a, b], ["2.20.0", "2.22.0"])[0] == "2.22.0"
+
+
+def test_rv1_a_fixed_version_of_the_branch_of_the_candidate_is_safe() -> None:
+    a = record("lib", "2.18.0", "2.18.11, 2.21.3", id="A")
+    assert upgrade_target("2.18.0", [a])[0] == "2.18.11"
+    b = record("lib", "2.18.0", "2.18.5", id="B")
+    assert upgrade_target("2.18.0", [a, b])[0] == "2.18.11"
+    assert upgrade_target("2.18.0", [a, b], ["2.18.12"])[0] == "2.18.12"
+    assert upgrade_target("2.18.0", [a, b], ["2.18.8"])[0] == "2.18.11"
+
+
+def test_rv1_no_safe_candidate_in_the_major_is_needs_major() -> None:
+    a = record("lib", "2.18.0", "2.18.11, 3.0.0", id="A")
+    b = record("lib", "2.18.0", "2.20.0, 3.1.0", id="B")
+    target, _, code = upgrade_target("2.18.0", [a, b])
+    assert (target, code) == (None, "needs_major")

@@ -11,7 +11,7 @@ from sca_rules import VersionError, choose_target, compare
 
 from . import plan_codes as codes
 from .config import Config
-from .development import INCOMPLETE, OPEN, Development, key_of, usable
+from .development import INCOMPLETE, OPEN, development_of, key_of, usable
 from .lines import select_lines
 from .reports import Reports, Version, development_version
 
@@ -203,7 +203,7 @@ def plan_line(
 ) -> dict[str, Any]:
     """The items, skipped packages and drop counts of one release line."""
     dropped = {codes.SEVERITY: 0, codes.UNFIXABLE: 0, codes.DEV: 0}
-    development = Development.of(dev)
+    development = development_of(dev)
     dev_installed = {key_of(p): p["installed"] for p in dev.packages}
     skipped: dict[tuple[str, str, str], dict[str, Any]] = {}  # per key and code
     kept: dict[tuple[str, str], list[Record]] = {}
@@ -234,7 +234,7 @@ def plan_line(
         elif not config.include_dev and record["dev"]:
             dropped[codes.DEV] += 1
         else:
-            state, gap = development.state(record, version)
+            state, gap = development.state(record, version.targets)
             if state == INCOMPLETE:
                 skip(
                     record,

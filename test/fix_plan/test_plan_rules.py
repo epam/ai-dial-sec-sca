@@ -8,10 +8,18 @@ from helpers import (
     items,
     plan,
     record,
+    report,
     target,
     version,
 )
-from sca_fix_plan import Config, ReportError, build_plan, merge_reports, parse_config
+from sca_fix_plan import (
+    Config,
+    ReportError,
+    build_plan,
+    classify,
+    merge_reports,
+    parse_config,
+)
 
 DEV_IMAGE = "image-app-development"
 
@@ -296,7 +304,8 @@ def test_library_only_in_an_image() -> None:
     rel = release(
         rec, targets=[target("image-app-1.2.3", "image", "app"), target("source-1.2.3")]
     )
-    item = single(plan(development(), rel))
+    dev = development(targets=[target(DEV_SOURCE), target("image-app-dev", "image", "app")])
+    item = single(plan(dev, rel))
     assert (item["method"], item["reason"]) == (
         "manual",
         "only in the image, not in a manifest",
@@ -489,7 +498,46 @@ def test_n5_4_item_relationship_ignores_records_only_in_an_image() -> None:
     second = record(
         "lib", "1.0.0", "1.0.5", id="CVE-2", relationship=None, where=["image-1.2.3"]
     )
-    item = single(plan(development(), release(first, second, targets=targets)))
+    dev = development(
+        targets=[target(DEV_SOURCE), target("image-dev", "image", "app:1.2.3")]
+    )
+    item = single(plan(dev, release(first, second, targets=targets)))
     assert item["relationship"] == "indirect"
-    image_only = single(plan(development(), release(second, targets=targets)))
+    image_only = single(plan(dev, release(second, targets=targets)))
     assert image_only["relationship"] is None
+
+
+def skipped(result: dict[str, Any]) -> dict[str, str]:
+    return {s["pkg"]: s["reason"] for line in result["lines"] for s in line["skipped"]}
+
+
+def test_rv4_a_library_only_in_an_image_needs_the_development_image() -> None:
+    rec = record("lib", "1.0.0", "1.0.5", where=["image-app-1.2.3"])
+    rel = release(
+        rec, targets=[target("image-app-1.2.3", "image", "app"), target("source-1.2.3")]
+    )
+    failed = development(
+        targets=[
+            target(DEV_SOURCE),
+            target("image-dev", "image", "app", status="failed", packages=0),
+        ]
+    )
+    result = plan(failed, rel)
+    assert "no ok image target for app" in skipped(result)["lib"]
+    assert "lib" not in items(result)
+    assert classify([report(failed, rel)])[0]["state"] == "incomplete"
+
+
+def test_rv4_a_library_in_source_and_image_needs_both_to_be_complete() -> None:
+    rec = record(
+        "lib", "1.0.0", "1.0.5", where=["source-1.2.3", "image-app-1.2.3"]
+    )
+    rel = release(
+        rec, targets=[target("image-app-1.2.3", "image", "app"), target("source-1.2.3")]
+    )
+    no_image = development()
+    assert "no ok image target for app" in skipped(plan(no_image, rel))["lib"]
+    both = development(
+        targets=[target(DEV_SOURCE), target("image-dev", "image", "app")]
+    )
+    assert single(plan(both, rel))["pkg"] == "lib"

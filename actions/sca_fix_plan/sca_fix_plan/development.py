@@ -1,18 +1,16 @@
 """What development says about a release record: fixed, removed, open or unknown.
 
-The rule for one record lives in ``sca_rules`` (``development_state``); this module
-adds the planner's wrapping: whether development was scanned where the record lives.
-The planner and the report model share it through ``classify``.
+The rule lives in ``sca_rules`` (``Development``); this module applies it to the
+planner's ``Version`` and exposes ``classify``. The planner and the report model share
+it through ``classify``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
-from sca_rules import OPEN, development_state, identifiers, key_of, norm
-from sca_rules.development import Key
+from sca_rules import INCOMPLETE, OPEN, Development, identifiers, key_of, norm, usable
 
 from .config import Config
 from .lines import select_lines
@@ -20,90 +18,12 @@ from .reports import Reports, Version, development_version, merge_reports
 
 Record = Mapping[str, Any]
 
-INCOMPLETE = "incomplete"
 
-
-def usable(target: Mapping[str, Any]) -> bool:
-    return target.get("status") == "ok" and target.get("packages_scanned", 0) > 0
-
-
-@dataclass(frozen=True)
-class Development:
-    """The development version with the packages it runs and the identifiers of its
-    records, per package key.
-    """
-
-    version: Version
-    runs: frozenset[Key]
-    ids: Mapping[Key, frozenset[str]]
-
-    @classmethod
-    def of(cls, version: Version) -> Development:
-        ids: dict[Key, set[str]] = {}
-        for record in version.vulns:
-            ids.setdefault(key_of(record), set()).update(identifiers(record))
-        return cls(
-            version,
-            frozenset(key_of(p) for p in version.packages if p.get("installed"))
-            | frozenset(ids),
-            {k: frozenset(v) for k, v in ids.items()},
-        )
-
-    def complete(self, id: str) -> bool:
-        """The Trivy target ``id`` of development is usable and every other scanner's
-        target of the same id (the OSV twin) is ``ok`` or ``not_applicable``.
-        """
-        target = self.version.targets.get(id)
-        twins = self.version.twins.get(id, ())
-        return (
-            target is not None
-            and usable(target)
-            and all(s in ("ok", "not_applicable") for s in twins)
-        )
-
-    def gap(self, record: Record, version: Version) -> str | None:
-        """What is missing to trust the absence of ``record`` from development, or
-        None.
-
-        The absence counts only when development was scanned where the record lives:
-        for a library, at least one source target, every source target complete; for
-        an OS package, for every image of the record a complete development target
-        of the same image. The status of the version is not used: a failure of an
-        unrelated target does not block the record.
-        """
-        targets = self.version.targets
-        if record["class"] == "lang":
-            sources = sorted(i for i, t in targets.items() if t.get("kind") == "fs")
-            if not sources or not all(self.complete(i) for i in sources):
-                return "no ok source target with packages scanned"
-            return None
-        images = sorted(
-            {
-                version.targets[i]["image"]
-                for i in record["where"]
-                if i in version.targets and version.targets[i].get("image")
-            }
-        )
-        missing = [
-            image
-            for image in images
-            if not any(
-                t.get("image") == image and self.complete(i) for i, t in targets.items()
-            )
-        ]
-        if missing or not images:
-            return f"no ok image target for {', '.join(missing) or 'the record'}"
-        return None
-
-    def state(self, record: Record, version: Version) -> tuple[str, str | None]:
-        """``(state, gap)`` of a record of a release ``version``: ``incomplete`` with
-        the missing part, ``open`` when a development record of the same package
-        shares an identifier, ``removed`` when development does not run the package,
-        else ``fixed``. A development record of another package never counts.
-        """
-        if gap := self.gap(record, version):
-            return INCOMPLETE, gap
-        return development_state(record, self.runs, self.ids), None
+def development_of(version: Version) -> Development:
+    """The development data of a ``Version`` (the rule itself is in ``sca_rules``)."""
+    return Development.of(
+        version.targets, version.twins, version.packages, version.vulns
+    )
 
 
 def classify(reports: Reports | Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -117,7 +37,7 @@ def classify(reports: Reports | Sequence[Mapping[str, Any]]) -> list[dict[str, A
     line order (the candidate first, then newest first), class, key and ids.
     """
     merged = reports if isinstance(reports, Reports) else merge_reports(reports)
-    dev = Development.of(development_version(merged))
+    dev = development_of(development_version(merged))
     entries: list[tuple[int, dict[str, Any]]] = []
     for order, planned in enumerate(select_lines(merged, Config())[0]):
         line, version = planned.line, planned.version
@@ -136,7 +56,7 @@ def classify(reports: Reports | Sequence[Mapping[str, Any]]) -> list[dict[str, A
                         "key": norm(record["pkg"]),
                         "pkg": record["pkg"],
                         "ids": sorted(identifiers(record)),
-                        "state": dev.state(record, version)[0],
+                        "state": dev.state(record, version.targets)[0],
                     },
                 )
             )

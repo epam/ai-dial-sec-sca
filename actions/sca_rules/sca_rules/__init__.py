@@ -5,11 +5,14 @@ One implementation of each. Standard library only; no side effects on import.
 
 from .development import (
     FIXED,
+    INCOMPLETE,
     OPEN,
     REMOVED,
+    Development,
     development_state,
     identifiers,
     key_of,
+    usable,
 )
 from .keys import norm
 from .target import ALLOW_MAJOR, choose_target, fixed_versions, upgrade_target
@@ -27,8 +30,10 @@ __version__ = "0.8.1"
 __all__ = [
     "ALLOW_MAJOR",
     "FIXED",
+    "INCOMPLETE",
     "OPEN",
     "REMOVED",
+    "Development",
     "VersionError",
     "choose_target",
     "compare",
@@ -41,5 +46,6 @@ __all__ = [
     "norm",
     "release_part",
     "upgrade_target",
+    "usable",
     "version_key",
 ]

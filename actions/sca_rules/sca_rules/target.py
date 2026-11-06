@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .versions import VersionError, compare, major, version_key
+from .versions import VersionError, VersionKey, compare, major, release_part, version_key
 
 Record = Mapping[str, Any]
 
@@ -20,6 +20,27 @@ def fixed_versions(record: Record) -> list[str]:
     return [v.strip() for v in record["fixed"].split(",") if v.strip()]
 
 
+def ordered(version: str) -> tuple[VersionKey, str]:
+    """Sort key: version order, then the text (``1.2`` and ``1.2.0`` are equal versions;
+    the text keeps the choice between them the same on every run).
+    """
+    return version_key(version), version
+
+
+def safe_for(candidate: str, record: Record) -> bool:
+    """True when ``candidate`` is not vulnerable to ``record``: it is at or above the
+    highest fixed version of the record, or at or above a fixed version of the same
+    major.minor (the fix of the maintained branch the candidate is on).
+    """
+    fixed = fixed_versions(record)
+    if compare(candidate, max(fixed, key=version_key)) >= 0:
+        return True
+    line = release_part(candidate)[:2]
+    return any(
+        release_part(f)[:2] == line and compare(candidate, f) >= 0 for f in fixed
+    )
+
+
 def choose_target(
     installed: str,
     records: Sequence[Record],
@@ -28,31 +49,44 @@ def choose_target(
 ) -> tuple[str | None, str, str | None]:
     """The target version for one installed version: ``(target, evidence, None)`` or
     ``(None, reason, reason_code)``. Raises ``VersionError`` for a version it cannot
-    compare.
+    compare. A candidate (a development version, else a fixed version) must be at or
+    above ``required`` and safe for every record that has a fixed version above
+    ``installed`` (``safe_for``).
     """
     applicable = [r for r in records if installed in r["installed"]]
-    fixes = sorted({f for r in applicable for f in fixed_versions(r)}, key=version_key)
+    fixes = sorted(
+        {f for r in applicable for f in fixed_versions(r)}, key=ordered
+    )
     required: str | None = None
+    fixable = []  # the records that have a fixed version above ``installed``
     for record in applicable:
         above = [f for f in fixed_versions(record) if compare(f, installed) > 0]
         if not above:
             continue
+        fixable.append(record)
         lowest = min(above, key=version_key)
         if required is None or compare(lowest, required) > 0:
             required = lowest
     if required is None:
         return None, f"no fixed version above {installed}", NO_FIXED_VERSION
     same_major = major(installed)
+    safe = {
+        c
+        for c in (*dev_versions, *fixes)
+        if all(safe_for(c, r) for r in fixable)
+    }
     from_dev = sorted(
-        (v for v in dev_versions if compare(v, required) >= 0), key=version_key
+        (v for v in dev_versions if compare(v, required) >= 0), key=ordered
     )
     allowed = [
-        v for v in from_dev if major(v) == same_major or allow_major == "dev-proven"
+        v
+        for v in from_dev
+        if v in safe and (major(v) == same_major or allow_major == "dev-proven")
     ]
     if allowed:
         return allowed[0], f"development runs {allowed[0]}", None
     reachable = [f for f in fixes if compare(f, required) >= 0]
-    in_major = [f for f in reachable if major(f) == same_major]
+    in_major = [f for f in reachable if f in safe and major(f) == same_major]
     if in_major:
         return in_major[0], "lowest fixed version in the same major", None
     note = (
@@ -80,7 +114,7 @@ def upgrade_target(
     above ``installed``. The target is the lowest ``dev_versions`` entry at or above
     it, else the lowest fixed version at or above it, each in the major of
     ``installed`` (``allow_major="dev-proven"`` also takes a development version of
-    another major). ``evidence`` is a plain string; ``reason_code`` is
+    another major), and not vulnerable to any of the records (``safe_for``). ``evidence`` is a plain string; ``reason_code`` is
     ``no_fixed_version``, ``needs_major`` or ``version_unparsable`` (a version that
     cannot be compared: the result is returned, not raised). ``ValueError`` for an
     ``allow_major`` that is not ``none`` or ``dev-proven``.
