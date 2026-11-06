@@ -11,6 +11,7 @@ These actions are called by the `sca_scheduled.yml` workflow of [epam/ai-dial-ci
 - `actions/sca_merge_results`: normalizes the Trivy and OSV reports, merges them into `report.json` and writes the `summary.md` job summary (see below). Optional input `engine-ref` (or the environment variable `SCA_ENGINE_REF`, or the `--engine-ref` argument of `merge_results.py`) sets the `engine` field of the report. The order is the argument, then the environment variable, then the ref the action runs from (`ACTION_PATH`), else `null`. Empty (the default): nothing changes.
 - `actions/_install_trivy`: installs Trivy from the GitHub release of `version` (same rules and the same optional `trivy-sha256` as in `sca_query_osv`); `sca_query_osv` repeats its steps and shares its `install.sh`, because a composite action cannot use a sibling action by a relative path.
 - `actions/generate_gradle_lockfiles`: generates Gradle lockfiles on the fly so Trivy can resolve Gradle dependencies (repository files are not modified).
+- `actions/sca_fix_plan` and `actions/sca_fix_apply`: the fixer, see Fixer below.
 
 The actions share the code in `actions/_sca_lib` (it is imported through `PYTHONPATH=${{ github.action_path }}/..`, so the `actions/` layout must stay as it is).
 
@@ -54,6 +55,8 @@ Optional keys of `targets.json` that the caller may add before the merge (the re
 | `version_kinds` | object, ref to kind | The kind of a version whose ref is not a semver tag (see `versions[]`). |
 | `image_scan_disabled_reason` | string, on a target | The reason shown for a skipped OSV image scan (next to `image_scan_disabled`). |
 
+`sca_fix_plan` (`reports`, `config`, `output-dir`) and `sca_fix_apply` are described under Fixer.
+
 ## Job summary
 
 `summary.md` is organized by version (a branch or a release tag), because a fixer needs to know what to bump where. Only two tables and the version headings are visible; everything else is collapsed. The numbers come from `versions[]` of `report.json`, so the summary and the report agree.
@@ -73,11 +76,24 @@ Marks after a vulnerability id, in brackets:
 
 A package is not fixable when none of its vulnerabilities has a fixed version. If only some have one, it counts as fixable and `Fixed` lists the versions that exist.
 
+## Fixer
+
+The fixer turns the schema 4 reports into pull requests that bump the vulnerable packages of the newest release lines. The `sca_fix.yml` reusable workflow of [epam/ai-dial-ci](https://github.com/epam/ai-dial-ci) runs the two actions; they are not meant to be called on their own.
+
+- `actions/sca_fix_plan` (input `reports`: the `report.json` files of one repo; `config`: the policy as JSON; `output-dir`): plans which records of which versions become fix items, with the target version and the method (`dependabot`, `npm-override`, opt-in `docker-tag`; anything else is `manual` with a reason code). It writes `fix-plan.json` (schema 2) and `fix-plan.md`. A pure function of the reports and the configuration: no network, no git.
+- `actions/sca_fix_apply` (input `command`: `apply`, `publish`, `node` or `summary`): `apply` runs the automated items of one plan line on a checked-out branch (Dependabot CLI jobs, the npm override step, the base image bump) and proves each change with a rescan by the same detector as the scan (Trivy and OSV from one database state, records built by `records_of` of the engine); `publish` pushes the fix branch the fixer owns and opens or updates one pull request; `node` reads the node version of a branch; `summary` writes the job summary of all lines.
+
+`sca_fix_plan` is also an installable package (`actions/sca_fix_plan`, standard library only, no side effects on import, `__version__` 1.0.0) with this public API:
+
+- `build_plan(reports, config)`: the fix plan (`reports` from `merge_reports`, `config` from `parse_config`).
+- `classify(...)`: the state of every record in the planned lines: fixed, removed or open in development, or incomplete data.
+- `upgrade_target(installed, records, dev_versions=(), allow_major="none")`: the target version the plan rule gives for one installed version of a package, as `(target, evidence, reason_code)`. `records` are the records of that package; the required version is the highest over the records of their lowest fixed version above `installed`; the target is the lowest development version at or above it, else the lowest fixed version at or above it, in the major of `installed` (`allow_major="dev-proven"` also takes a development version of another major). Without a target, `target` is `None`, `evidence` the reason and `reason_code` one of `no_fixed_version`, `needs_major` or `version_unparsable` (a version that cannot be compared is returned, not raised). `build_plan` uses the same rule, so the two cannot differ.
+
 ## Tests
 
 ```sh
 python -m pip install pytest
-python -m pytest test/sca
+python -m pytest test/sca test/fix_plan test/fix_apply
 ```
 
 The tests need Python 3.12 and no network access. They run in GitHub Actions on every push and pull request to `main`.

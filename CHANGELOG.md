@@ -15,14 +15,15 @@
 - `src_pkg` on `versions[].vulns[]` and `versions[].packages[]`: the Trivy source package of an OS package.
 - `title` on `versions[].vulns[]`: the Trivy title, else the OSV summary.
 - `summary` and `src_pkg` on `findings[]`: the OSV summary (`null` for Trivy) and the Trivy `SrcName` (`null` otherwise).
+- The fixer: the actions `sca_fix_plan` (fix plan, schema 2) and `sca_fix_apply` (Dependabot CLI, npm override, opt-in base image bump, proof by rescan, one pull request per release line), and `records_of` in `sca_merge_results` so the applier builds records the way the report does.
 - `sca_query_osv` and `_install_trivy`: optional input `trivy-sha256`, the sha256 of the Trivy release archive of the runner's architecture, for a `trivy-version` that has no pinned value in the engine (pinned: `v0.75.0`, Linux-64bit and Linux-ARM64). `trivy-version` must have the form `vX.Y.Z`; anything else fails with an error.
 - `acceptances[].bad_rule`: a rule of the wrong shape (see the README) is kept with `bad_rule: true`, never acts and does not stop the report; the summary lists such rules.
+- `sca_fix_plan.upgrade_target(installed, records, dev_versions=(), allow_major="none")`: the public form of the plan's target rule, returning `(target, evidence, reason_code)`.
 
 ### Changed
 
 - The `.trivyignore` of the only source target is read when the run has no default-branch source (a run whose source is a version). When a line and an acceptance rule name the same vulnerability, the earliest `until` wins.
 - Intended change, without a new input: in a scan-tag run (the only source target is a tag, not the default branch) the `.trivyignore` of that tag is read and marks the records, as described in the previous item; the golden report `report_scan_tag.json` records it. Consumers of `ignores` and `ignores_error` see the tag's file there.
-- `sca_merge_results`: the grouping of findings into records is the function `records_of` in `vulns.py` (internal refactor, the output is byte-identical).
 - `ignores_error` is `null` for a run without any source target (images only); it was an error text.
 - `summary.md`: a row lists at most 5 vulnerability ids and then `+N more`, the link text is the record id, and a commit shared by several source targets is listed once under `Seen in`. `report.json` is not affected.
 - Trivy is installed from the aquasecurity/trivy GitHub release of `trivy-version` (sha256 of the archive pinned per version in the engine, else `trivy-sha256`; cached by version, OS and architecture; the cached archive is verified again on every run) instead of `aquasecurity/setup-trivy`, which downloaded from `get.trivy.dev`.
