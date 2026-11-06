@@ -459,7 +459,7 @@ def test_record_key_order():
     assert list(record(finding("s", "CVE-1", "lib"))) == [
         "id", "names", "pkg", "class", "severity", "fixed", "dev", "installed",
         "where", "sources", "published", "modified", "cvss", "aliases", "ecosystem",
-        "relationship", "locations", "accepted", "pkg_key", "src_pkg", "title", "upgrades",
+        "relationship", "locations", "accepted", "pkg_key", "src_pkg", "title", "upgrades", "dev_state",
     ]  # fmt: skip
 
 

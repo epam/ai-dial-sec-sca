@@ -172,3 +172,52 @@ def test_an_os_record_without_a_fixed_version_is_no_fixed_version():
         "CVE-1": [entry("2.39", None, "no_fixed_version")],
         "CVE-2": [entry("2.39", None, "image_rebuild")],
     }
+
+
+# --- dev_state ---
+
+
+def states(findings, targets=None, package_sets=None, version="1.0.0"):
+    targets = targets or [target("dev"), target("rel", ref=version)]
+    doc = report(targets, findings)
+    versions = {v["ref"]: v for v in build_versions(doc, package_sets or {})}
+    return {r["id"]: r["dev_state"] for r in versions[version]["vulns"]}
+
+
+def test_x2_dev_state_fixed_removed_open_and_incomplete():
+    dev_row = row("CVE-2", "1.2", version="1.4", tid="dev")
+    rows = [
+        row("CVE-1", "1.2", pkg="gone"),
+        row("CVE-2", "1.2"),
+        row("CVE-3", "1.2", pkg="kept"),
+        dev_row,
+    ]
+    sets = {"dev": {("lang", "kept", "1.4")}}
+    assert states(rows, package_sets=sets) == {
+        "CVE-1": "removed",
+        "CVE-2": "open",
+        "CVE-3": "fixed",
+    }
+    failed = [target("dev", status="failed"), target("rel", ref="1.0.0")]
+    assert states(rows[:1], targets=failed) == {"CVE-1": "incomplete"}
+
+
+def test_x2_dev_state_is_null_on_development_records_and_without_development():
+    rows = [row("CVE-1", "1.2", tid="dev"), row("CVE-2", "1.2")]
+    doc = report([target("dev"), target("rel", ref="1.0.0")], rows)
+    versions = {v["ref"]: v for v in build_versions(doc, {})}
+    assert [r["dev_state"] for r in versions["development"]["vulns"]] == [None]
+    alone = states([row("CVE-2", "1.2")], targets=[target("rel", ref="1.0.0")])
+    assert alone == {"CVE-2": None}
+
+
+def test_x2_dev_state_of_an_image_only_library_needs_the_development_image():
+    image = target("img", kind="image", ref="1.0.0")
+    rows = [row("CVE-1", "1.2", tid="img")]
+    targets = [target("dev"), image]
+    assert states(rows, targets=targets) == {"CVE-1": "incomplete"}
+    dev_image = target("dev-img", kind="image", ref="development")
+    sets = {"dev": {("lang", "lib", "1.5")}}
+    assert states(rows, targets=[*targets, dev_image], package_sets=sets) == {
+        "CVE-1": "fixed"
+    }
