@@ -14,6 +14,9 @@ from vulns import COUNT_KEYS, VERSION, counts_of, fixed_of, pkg_of
 # parts of the job summary that are not this one
 STEP_SUMMARY_LIMIT_BYTES = 1024 * 1024 - 16 * 1024
 
+# a row lists at most this many vulnerability ids (a curl row has about 27)
+MAX_IDS_IN_CELL = 5
+
 Finding = Mapping[str, Any]
 
 
@@ -121,13 +124,19 @@ def chain_cell(row: Mapping[str, Any]) -> str:
 
 
 def vulnerabilities_cell(row: Mapping[str, Any]) -> str:
+    """The first ``MAX_IDS_IN_CELL`` records of the row, the rest as a count (the
+    whole list is in ``report.json``); each links to its advisory by the record id.
+    """
     mixed = len({v["severity"] for v in row["vulns"]}) > 1
-    return ", ".join(
+    shown = row["vulns"][:MAX_IDS_IN_CELL]
+    text = ", ".join(
         (v["severity"][0] + " " if mixed else "")
         + (f"[{cell(v['id'])}]({v['url']})" if v["url"] else cell(v["id"]))
         + cell(v["note"])
-        for v in row["vulns"]
+        for v in shown
     )
+    more = len(row["vulns"]) - len(shown)
+    return text + (f", +{more} more" if more else "")
 
 
 def package_table(
@@ -149,7 +158,9 @@ def package_table(
         if libraries:
             cells += [chain_cell(r), where_cell(r["where"])]
         cells += [
-            ", ".join(label for label, tid in columns if tid in r["targets"]),
+            ", ".join(
+                dict.fromkeys(label for label, tid in columns if tid in r["targets"])
+            ),
             r["scanners"],
         ]
         lines.append("| " + " | ".join(cells) + " |")
@@ -284,6 +295,34 @@ def ignores_audit(report: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def acceptances_audit(report: Mapping[str, Any]) -> list[str]:
+    """What is wrong with the acceptance rules of the pipeline; nothing when all is
+    well or the run has none.
+    """
+    checks = (
+        ("Expired", lambda a: a["expired"]),
+        ("With a bad date", lambda a: a["bad_expiry"]),
+        ("Malformed", lambda a: a.get("bad_rule")),
+        (
+            "Matching nothing",
+            lambda a: not (
+                a["matched"] or a["expired"] or a["bad_expiry"] or a.get("bad_rule")
+            ),
+        ),
+    )
+    lines = []
+    for title, bad in checks:
+        found = [
+            str(a.get("package", a.get("rule", "?")))
+            + (f" (until {a.get('expires')})" if a.get("expires") else "")
+            for a in report.get("acceptances") or []
+            if bad(a)
+        ]
+        if found:
+            lines.append(f"- {title}: {cell(', '.join(found))}")
+    return lines
+
+
 def count_cell(n: int) -> str:
     return str(n) if n else "-"
 
@@ -376,8 +415,8 @@ def packages_table(
     if any(v["note"] for r in unique for v in r["vulns"]):
         lines += [
             "",
-            "new in DB: published within 14 days; accepted until D: the default-branch "
-            ".trivyignore accepts it until D; fixed in X: not found in release X, "
+            "new in DB: published within 14 days; accepted until D: a `.trivyignore` line "
+            "or an acceptance rule of the caller accepts it until D; fixed in X: not found in release X, "
             "which has the same targets.",
         ]
     return lines
@@ -496,6 +535,8 @@ def build_summary(report: Mapping[str, Any]) -> str:
     lines += [*packages_table(report, versions, version_rows, [*unique]), ""]
     if audit := ignores_audit(report):
         lines += ["## Ignore file", "", *audit, ""]
+    if audit := acceptances_audit(report):
+        lines += ["## Acceptance rules", "", *audit, ""]
     for v in versions:
         if version_rows[v["ref"]]:
             lines += version_section(v["ref"], version_rows[v["ref"]], columns)

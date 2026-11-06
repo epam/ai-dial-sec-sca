@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from _sca_lib import append_text, dump_json, escape_command_data, format_time, read_json
-from ignores import add_ignores
+from ignores import add_acceptances, add_ignores
 from normalize import (
     Findings,
     Inventory,
@@ -253,7 +253,9 @@ def run_merge(
         "targets": entries,
         "findings": list(findings.values()),
     }
-    report["versions"] = build_versions(report, package_sets)
+    if doc.get("acceptances") is not None:  # before build_versions: record_of reads findings[].accepted
+        add_acceptances(report, doc["acceptances"])
+    report["versions"] = build_versions(report, package_sets, doc.get("version_kinds"))
     add_ignores(report, parts_dir)
     dump_json(output_dir / "report.json", report)
     summary = build_summary(report)
@@ -273,6 +275,11 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         default="",
         help="JSON object with vulnerability_db_updated_at and java_db_updated_at",
     )
+    parser.add_argument(
+        "--engine-ref",
+        default=os.environ.get("SCA_ENGINE_REF", ""),
+        help="ref of the engine for the report; default: derived from ACTION_PATH",
+    )
     return parser.parse_args(argv)
 
 
@@ -287,7 +294,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.output_dir,
         format_time(datetime.now(UTC)),
         trivy_db,
-        engine_ref(action_path),
+        args.engine_ref or engine_ref(action_path),
         int(attempt) if attempt.isdigit() else None,
     )
     failed = [e for e in report["targets"] if e["status"] == "failed"]
