@@ -214,3 +214,64 @@ def test_x2_dev_state_of_an_image_only_library_needs_the_development_image():
     assert states(rows, targets=[*targets, dev_image], package_sets=sets) == {
         "CVE-1": "fixed"
     }
+
+
+def test_rv4_a_library_in_source_and_image_needs_the_development_sources_only():
+    image = target("img", kind="image", ref="1.0.0")
+    targets = [target("dev"), target("rel", ref="1.0.0"), image]
+    rows = [row("CVE-1", "1.2", tid="rel"), row("CVE-1", "1.2", tid="img")]
+    sets = {"dev": {("lang", "lib", "1.5")}}
+    assert states(rows, targets=targets, package_sets=sets) == {"CVE-1": "fixed"}
+
+
+# --- the group contract and RV3 ---
+
+DEV_RUNS = {"dev": {("lang", "lib", "1.2.5")}}
+
+
+def test_rv3_with_development_evidence_every_record_of_the_group_gets_the_target():
+    # development runs 1.2.5 and has none of the records: C has no fix above 1.0 and
+    # is absent from development, so it is fixed there like the others
+    rows = [row("A", "1.2"), row("B", "1.1"), row("C", "")]
+    got = upgrades(rows, package_sets=DEV_RUNS)
+    assert got == {k: [entry("1.0", "1.2.5")] for k in "ABC"}
+
+
+def test_group_contract_without_evidence_a_record_without_a_fix_is_no_fixed_version():
+    rows = [row("A", "1.2"), row("B", "1.1"), row("C", "")]
+    got = upgrades(rows)
+    assert got == {
+        "A": [entry("1.0", "1.2")],
+        "B": [entry("1.0", "1.2")],
+        "C": [entry("1.0", None, "no_fixed_version")],
+    }
+    rows = [row("A", "2.0"), row("B", "2.1"), row("C", "")]
+    got = upgrades(rows)
+    assert got["A"] == got["B"] == [entry("1.0", None, "needs_major")]
+    assert got["C"] == [entry("1.0", None, "no_fixed_version")]
+
+
+def test_group_contract_a_group_target_is_shared_by_every_record_that_has_one():
+    rows = [row("A", "1.2, 2.0"), row("B", "1.1, 2.0"), row("C", "0.5")]
+    for sets in ({}, DEV_RUNS):
+        got = upgrades(rows, package_sets=sets)
+        targets = {e["target"] for v in got.values() for e in v if e["target"]}
+        assert len(targets) == 1
+
+
+# --- speed ---
+
+
+def test_many_records_of_one_package_are_computed_in_seconds():
+    import time
+
+    rows = []
+    for n in range(1000):
+        for installed in ("1.0", "1.1", "1.2"):
+            rows.append(row(f"CVE-{n}", f"1.{n % 40 + 3}, 2.{n % 7}", version=installed))
+    started = time.perf_counter()
+    got = upgrades(rows)
+    elapsed = time.perf_counter() - started
+    assert len(got) == 1000
+    assert all(len(v) == 3 for v in got.values())
+    assert elapsed < 2, elapsed

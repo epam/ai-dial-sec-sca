@@ -528,16 +528,19 @@ def test_rv4_a_library_only_in_an_image_needs_the_development_image() -> None:
     assert classify([report(failed, rel)])[0]["state"] == "incomplete"
 
 
-def test_rv4_a_library_in_source_and_image_needs_both_to_be_complete() -> None:
+def test_rv4_a_library_in_source_and_image_needs_the_sources_only() -> None:
     rec = record(
         "lib", "1.0.0", "1.0.5", where=["source-1.2.3", "image-app-1.2.3"]
     )
     rel = release(
         rec, targets=[target("image-app-1.2.3", "image", "app"), target("source-1.2.3")]
     )
-    no_image = development()
-    assert "no ok image target for app" in skipped(plan(no_image, rel))["lib"]
-    both = development(
-        targets=[target(DEV_SOURCE), target("image-dev", "image", "app")]
-    )
-    assert single(plan(both, rel))["pkg"] == "lib"
+    assert single(plan(development(), rel))["pkg"] == "lib"
+    failed_source = development(targets=[target(DEV_SOURCE, status="failed", packages=0)])
+    assert "source target" in skipped(plan(failed_source, rel))["lib"]
+
+
+def test_rv4_an_os_record_still_needs_the_development_image() -> None:
+    rec = record("libc6", "2.39", "2.40", where=["image-app-1.2.3"], **{"class": "os"})
+    rel = release(rec, targets=[target("image-app-1.2.3", "image", "app")])
+    assert "no ok image target for app" in skipped(plan(development(), rel))["libc6"]

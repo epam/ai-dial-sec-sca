@@ -103,14 +103,19 @@ class Development:
         kind of target the record was found in: in a source target (at least one
         development source target, every one complete), and for each image of the
         record a complete development target of the same image. A library record
-        with no known place is checked as a source record. The status of the version
-        is not used: a failure of an unrelated target does not block the record.
+        with a source target is checked on the sources only (the source scan sees the
+        manifest); one found only in images needs the image, as an OS record does. A
+        library record with no known place is checked as a source record. The status
+        of the version is not used: a failure of an unrelated target does not block
+        the record.
         """
         found = [targets[i] for i in record["where"] if i in targets]
         images = sorted({t["image"] for t in found if t.get("image")})
         in_source = any(t.get("kind") == "fs" for t in found) or (
             record["class"] == "lang" and not images
         )
+        if in_source and record["class"] == "lang":
+            images = []  # the source scan sees the manifest; the image adds nothing
         if in_source:
             sources = sorted(
                 i for i, t in self.targets.items() if t.get("kind") == "fs"

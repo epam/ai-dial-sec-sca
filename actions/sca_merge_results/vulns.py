@@ -16,6 +16,7 @@ from sca_rules import (
     FIXED,
     Development,
     VersionError,
+    compare,
     fixed_versions,
     norm,
     upgrade_target,
@@ -338,43 +339,61 @@ def dev_states(
     }
 
 
-def upgrade_of(
-    installed: str,
-    record: Mapping[str, Any],
+def has_fix_above(installed: str, record: Mapping[str, Any]) -> bool:
+    """True when ``record`` has a fixed version above ``installed``; a version that
+    cannot be compared counts as yes (the group's target gives the reason).
+    """
+    try:
+        return any(compare(f, installed) > 0 for f in fixed_versions(record))
+    except VersionError:
+        return True
+
+
+def group_upgrades(
     same: Sequence[Mapping[str, Any]],
     dev: Sequence[str],
-) -> dict[str, Any]:
-    """The entry of ``upgrades`` of ``record`` for ``installed``. ``same`` are the
-    records of the package in the version, ``dev`` the versions development runs
-    when it fixes all of the records that contain ``installed`` (else empty).
+    states: Mapping[int, str | None],
+) -> dict[int, list[dict[str, Any]]]:
+    """``upgrades`` of the records of one package and class in one version (by
+    ``id()``). ``dev`` are the versions development runs. The target and its reason
+    are computed once per installed version, for the records that contain it.
     """
-    entry = {"installed": installed, "target": None, "reason": None}
-    if record["class"] == "os":
-        entry["reason"] = "image_rebuild" if fixed_versions(record) else "no_fixed_version"
-        return entry
-    target, _, reason = upgrade_target(installed, [record], ())
-    if reason == "no_fixed_version":  # no fix above this version for this record
-        entry["reason"] = reason
-        return entry
-    target, _, reason = upgrade_target(installed, same, dev)
-    entry["target"], entry["reason"] = target, reason
-    return entry
+    out: dict[int, list[dict[str, Any]]] = {id(r): [] for r in same}
+    for installed in sorted({i for r in same for i in r["installed"]}, key=upgrade_order):
+        here = [r for r in same if installed in r["installed"]]
+        evidence = bool(dev) and all(states[id(r)] == FIXED for r in here)
+        target, reason = None, None
+        if here[0]["class"] != "os":
+            target, _, reason = upgrade_target(
+                installed, here, dev if evidence else ()
+            )
+        for record in here:
+            entry = {"installed": installed, "target": target, "reason": reason}
+            if record["class"] == "os":
+                entry["reason"] = (
+                    "image_rebuild" if fixed_versions(record) else "no_fixed_version"
+                )
+            elif not evidence and not has_fix_above(installed, record):
+                entry["target"], entry["reason"] = None, "no_fixed_version"
+            out[id(record)].append(entry)
+    return out
 
 
 def set_rule_fields(
     versions: Sequence[dict[str, Any]], report: Mapping[str, Any]
 ) -> None:
     """``upgrades`` and ``dev_state`` of every record. ``upgrades``: per installed
-    version of the record ``target``,
-    the version to upgrade to by the rule of the fix plan (``sca_rules.upgrade_target``
-    over the records of the same package and class in the same version), and ``reason``
-    (null exactly when there is a target): ``needs_major``, ``no_fixed_version``,
+    version of the record ``target``, the version to upgrade to by the rule of the fix
+    plan (``sca_rules.upgrade_target`` over the records of the same package and class
+    in the same version that contain the installed version), and ``reason`` (null
+    exactly when there is a target): ``needs_major``, ``no_fixed_version``,
     ``version_unparsable``, or ``image_rebuild`` (an ``os`` record with a fixed
-    version). A record with no fixed version above an installed version has
-    ``no_fixed_version`` for it, whatever the other records give. The versions
-    development runs are the evidence for the target only when development fixes every
-    record that contains the installed version. ``dev_state``: what the development
-    versions say about the record (see ``dev_states``).
+    version). The versions development runs are the evidence for the target only when
+    development fixes every record that contains the installed version; with that
+    evidence every record of the group gets the group's target. Without it a record
+    with no fixed version above the installed version has ``no_fixed_version`` for it,
+    whatever the other records give. ``dev_state``: what the development versions say
+    about the record (see ``dev_states``).
     """
     installed: dict[tuple[str, str], set[str]] = {}
     for version in versions:
@@ -396,20 +415,9 @@ def set_rule_fields(
         states = dev_states(version, trivy, development)
         for (cls, key), same in groups.items():
             runs = sorted(installed.get((cls, key), ()))
+            upgrades = group_upgrades(same, runs, states)
             for record in same:
-                record["upgrades"] = [
-                    upgrade_of(
-                        i,
-                        record,
-                        same,
-                        runs
-                        if all(
-                            states[id(r)] == FIXED for r in same if i in r["installed"]
-                        )
-                        else (),
-                    )
-                    for i in sorted(record["installed"], key=upgrade_order)
-                ]
+                record["upgrades"] = upgrades[id(record)]
                 record["dev_state"] = states[id(record)]
 
 

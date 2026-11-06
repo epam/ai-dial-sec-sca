@@ -23,6 +23,7 @@ would plan a downgrade or a version that does not fix anything.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 VersionKey = tuple[tuple[int, ...], int, int, int, str]
 
@@ -54,6 +55,7 @@ class VersionError(ValueError):
     """A version the comparison does not understand."""
 
 
+@lru_cache(maxsize=None)
 def release_part(version: str) -> tuple[int, ...]:
     """The leading numeric components: ``(3, 5, 8)`` for ``3.5.8-r0``."""
     match = _VERSION.match(version.strip())
@@ -62,6 +64,7 @@ def release_part(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+@lru_cache(maxsize=None)
 def version_key(version: str) -> VersionKey:
     """A sort key: ``(release, stage, qualifier number, revision, tail)``."""
     match = _VERSION.match(version.strip())
