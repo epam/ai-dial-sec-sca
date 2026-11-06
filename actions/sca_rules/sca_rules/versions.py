@@ -1,4 +1,4 @@
-"""Version comparison for the fix planner, standard library only.
+"""Version comparison for the fix planner and the scan engine, standard library only.
 
 One ordering for the versions of the scanned ecosystems (npm, PyPI, Maven, Alpine).
 The limits are deliberate: a version this module does not understand raises

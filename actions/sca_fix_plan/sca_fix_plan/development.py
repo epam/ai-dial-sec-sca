@@ -1,41 +1,26 @@
 """What development says about a release record: fixed, removed, open or unknown.
 
-This is the one definition of "fixed in development"; the planner and the report
-model share it through ``classify``.
+The rule for one record lives in ``sca_rules`` (``development_state``); this module
+adds the planner's wrapping: whether development was scanned where the record lives.
+The planner and the report model share it through ``classify``.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from sca_rules import OPEN, development_state, identifiers, key_of, norm
+from sca_rules.development import Key
 
 from .config import Config
 from .lines import select_lines
 from .reports import Reports, Version, development_version, merge_reports
 
 Record = Mapping[str, Any]
-Key = tuple[str, str]
 
-FIXED, REMOVED, OPEN, INCOMPLETE = "fixed", "removed", "open", "incomplete"
-
-
-def norm(pkg: str) -> str:
-    """The package key of the report: lowercase, each run of ``-``, ``_``, ``.`` as
-    one ``-``.
-    """
-    return re.sub(r"[-_.]+", "-", pkg.lower())
-
-
-def key_of(record: Record) -> Key:
-    """The package key ``(class, norm(pkg))`` of a record or a package entry."""
-    return record["class"], norm(record["pkg"])
-
-
-def identifiers(record: Record) -> set[str]:
-    """``id``, ``names`` and ``aliases`` of a record."""
-    return {record["id"], *record["names"], *(record.get("aliases") or [])}
+INCOMPLETE = "incomplete"
 
 
 def usable(target: Mapping[str, Any]) -> bool:
@@ -118,12 +103,7 @@ class Development:
         """
         if gap := self.gap(record, version):
             return INCOMPLETE, gap
-        key = key_of(record)
-        if key not in self.runs:
-            return REMOVED, None
-        if identifiers(record) & self.ids.get(key, frozenset()):
-            return OPEN, None
-        return FIXED, None
+        return development_state(record, self.runs, self.ids), None
 
 
 def classify(reports: Reports | Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

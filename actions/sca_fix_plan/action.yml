@@ -28,4 +28,4 @@ runs:
         OUTPUT_DIR: ${{ inputs.output-dir }}
       run: |
         mapfile -t reports < <(printf '%s\n' "$REPORTS" | sed '/^[[:space:]]*$/d')
-        PYTHONPATH="$ACTION_PATH" python -m sca_fix_plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
+        PYTHONPATH="$ACTION_PATH:$ACTION_PATH/../sca_rules" python -m sca_fix_plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"

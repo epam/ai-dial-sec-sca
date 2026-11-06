@@ -7,15 +7,14 @@ spelled.
 
 from __future__ import annotations
 
+from sca_rules.target import NEEDS_MAJOR, NO_FIXED_VERSION, VERSION_UNPARSABLE
+
 ACCEPTED = "accepted"
 NOT_FIXED_IN_DEVELOPMENT = "not_fixed_in_development"
 DEVELOPMENT_DATA_INCOMPLETE = "development_data_incomplete"
 SEVERITY = "severity"
 UNFIXABLE = "unfixable"
 DEV = "dev"
-NO_FIXED_VERSION = "no_fixed_version"
-NEEDS_MAJOR = "needs_major"
-VERSION_UNPARSABLE = "version_unparsable"
 NEEDS_IMAGE_REBUILD = "needs_image_rebuild"
 ONLY_IN_IMAGE = "only_in_image"
 ECOSYSTEM_UNSUPPORTED = "ecosystem_unsupported"

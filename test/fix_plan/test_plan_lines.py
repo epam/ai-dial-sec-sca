@@ -26,7 +26,7 @@ from sca_fix_plan import (
     merge_reports,
     parse_config,
 )
-from sca_fix_plan.development import norm
+from sca_rules import norm
 
 
 def lines_of(result: dict[str, Any]) -> list[tuple[str, str, str]]:

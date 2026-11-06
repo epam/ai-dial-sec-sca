@@ -4,7 +4,8 @@ import json
 
 import pytest
 from golden_case import merged
-from normalize import norm, normalize_osv, normalize_trivy
+from normalize import normalize_osv, normalize_trivy
+from sca_rules import norm
 from test_normalize import osv_native, package, result, vuln
 from test_summary import finding, report, target
 from vulns import build_versions

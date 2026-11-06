@@ -6,9 +6,10 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from sca_rules import ALLOW_MAJOR
+
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 METHODS = ("dependabot", "docker-tag", "npm-override")
-ALLOW_MAJOR = ("none", "dev-proven")
 
 
 class ConfigError(ValueError):

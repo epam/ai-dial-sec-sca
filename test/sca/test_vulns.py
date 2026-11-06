@@ -2,8 +2,7 @@
 
 import pytest
 from merge_results import engine_ref
-from normalize import norm
-from normalize import norm
+from sca_rules import norm
 from test_summary import finding, report, sample, target, two_versions
 from vulns import (
     build_versions,

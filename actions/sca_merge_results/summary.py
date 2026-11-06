@@ -7,7 +7,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from normalize import SEVERITIES, norm
+from normalize import SEVERITIES
+from sca_rules import norm
 from vulns import COUNT_KEYS, VERSION, counts_of, fixed_of, pkg_of
 
 # GitHub rejects a step summary over 1 MiB; the rest of the limit is left for the

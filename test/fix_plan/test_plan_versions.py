@@ -1,5 +1,5 @@
 import pytest
-from sca_fix_plan.versions import VersionError, compare, major
+from sca_rules import VersionError, compare, major
 
 OLDER_THAN = [
     ("1.2.16", "1.2.17"),

@@ -11,7 +11,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from normalize import SEVERITIES, PackageSet, norm
+from normalize import SEVERITIES, PackageSet
+from sca_rules import norm
 
 Finding = Mapping[str, Any]
 

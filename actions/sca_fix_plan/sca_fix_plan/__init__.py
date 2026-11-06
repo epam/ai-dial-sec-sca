@@ -8,9 +8,19 @@ function of the schema 4 reports and the configuration. Standard library only; n
 side effects on import.
 """
 
+try:
+    from sca_rules import upgrade_target
+except ModuleNotFoundError as exc:
+    if exc.name != "sca_rules":
+        raise
+    raise ImportError(
+        "sca_fix_plan needs the package sca_rules (actions/sca_rules of the same tag): "
+        "pip install it next to sca_fix_plan, or put actions/sca_rules on PYTHONPATH"
+    ) from exc
+
 from .config import Config, ConfigError, parse_config
 from .development import classify
-from .plan import SCHEMA_VERSION, build_plan, upgrade_target
+from .plan import SCHEMA_VERSION, build_plan
 from .reports import ReportError, Reports, merge_reports
 
 __version__ = "1.0.0"

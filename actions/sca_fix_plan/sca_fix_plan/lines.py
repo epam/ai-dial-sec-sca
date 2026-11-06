@@ -7,10 +7,11 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
+from sca_rules import VersionError, line_of, version_key
+
 from . import plan_codes as codes
 from .config import Config
 from .reports import Reports, Version
-from .versions import VersionError, line_of, version_key
 
 _STABLE_REF = re.compile(r"^\d+\.\d+\.\d+$")
 _CANDIDATE_REF = re.compile(r"^\d+\.\d+\.\d+-.+$")
