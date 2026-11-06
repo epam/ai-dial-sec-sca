@@ -36,7 +36,7 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
         # the shared code of the SCA actions: actions/_sca_lib, a sibling of this directory
-        PYTHONPATH: ${{ github.action_path }}/..
+        PYTHONPATH: ${{ github.action_path }}/..:${{ github.action_path }}/../sca_rules
         TARGETS_FILE: ${{ inputs.targets-file }}
         PARTS_DIR: ${{ inputs.parts-dir }}
         OUTPUT_DIR: ${{ inputs.output-dir }}

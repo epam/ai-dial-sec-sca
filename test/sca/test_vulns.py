@@ -2,8 +2,7 @@
 
 import pytest
 from merge_results import engine_ref
-from normalize import norm
-from normalize import norm
+from sca_rules import norm
 from test_summary import finding, report, sample, target, two_versions
 from vulns import (
     build_versions,
@@ -460,7 +459,7 @@ def test_record_key_order():
     assert list(record(finding("s", "CVE-1", "lib"))) == [
         "id", "names", "pkg", "class", "severity", "fixed", "dev", "installed",
         "where", "sources", "published", "modified", "cvss", "aliases", "ecosystem",
-        "relationship", "locations", "accepted", "pkg_key", "src_pkg", "title",
+        "relationship", "locations", "accepted", "pkg_key", "src_pkg", "title", "upgrades", "dev_state",
     ]  # fmt: skip
 
 

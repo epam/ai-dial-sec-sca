@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from _sca_lib import escape_command_data, read_json
+from sca_rules import norm
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 OSV_URL = "https://osv.dev/vulnerability/"
@@ -36,11 +37,6 @@ PackageSet = set[tuple[str, str, str]]
 def no_graph() -> dict[str, Any]:
     """What a package without a dependency graph (an OS package) has."""
     return {"chain": [], "relationship": None, "dev": False}
-
-
-def norm(name: str) -> str:
-    """The name a package is matched by (PEP 503 for every ecosystem)."""
-    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def pick_id(ids: list[str]) -> str:

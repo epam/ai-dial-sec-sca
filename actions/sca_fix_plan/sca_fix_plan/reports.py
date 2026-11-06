@@ -6,8 +6,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from sca_rules import line_of
+
 from . import plan_codes as codes
-from .versions import line_of
 
 SCHEMA_VERSION = 4
 

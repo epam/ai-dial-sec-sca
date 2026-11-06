@@ -85,6 +85,9 @@ def test_publish_without_files_opens_nothing(tmp_path: Path) -> None:
     assert code == 0
     written = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert written["pr"] == {
+        "url": None,
+        "number": None,
+        "base": "b",
         "action": "none",
         "reason": "nothing applied",
         "reason_code": "nothing_applied",
@@ -168,6 +171,9 @@ def test_n10_2_a_publish_error_still_writes_the_result(
     assert fix_apply.main(publish_args(tmp_path)) == 1
     written = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert written["pr"] == {
+        "url": None,
+        "number": None,
+        "base": "b",
         "action": "failed",
         "reason": "git push failed: denied",
         "reason_code": "pr_failed",
@@ -206,3 +212,21 @@ def test_n7_5_the_summary_tells_a_missing_branch_from_a_failed_job() -> None:
     gone, failed = text.split("branch `failed`")
     assert "not run (branch missing)" in gone
     assert "not run (job failed)" in failed
+
+
+def test_u2_a_published_pull_request_has_a_number_and_a_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = {"head": "sca-fix/b", "action": "created", "url": "u/pull/5", "number": 5}
+    monkeypatch.setattr(fix_apply, "publish", lambda *args: created)
+    result_file(tmp_path)
+    assert fix_apply.main(publish_args(tmp_path)) == 0
+    written = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert written["pr"] == {
+        "number": 5,
+        "base": "b",
+        "reason_code": None,
+        "head": "sca-fix/b",
+        "action": "created",
+        "url": "u/pull/5",
+    }

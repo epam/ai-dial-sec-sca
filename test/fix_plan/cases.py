@@ -16,7 +16,6 @@ packages, so it stays a few KB. The tests read the fixtures with ``load_case``.
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -54,10 +53,6 @@ CASES: dict[str, tuple[str, str, tuple[str, ...]]] = {
 }
 
 
-def norm(pkg: str) -> str:
-    return re.sub(r"[-_.]+", "-", pkg.lower())
-
-
 def development_only(report: dict[str, Any]) -> dict[str, Any]:
     """The report with the development version alone and its own targets."""
     versions = [v for v in report["versions"] if v["kind"] == "development"]
@@ -73,6 +68,8 @@ def cut(report: dict[str, Any], packages: tuple[str, ...]) -> dict[str, Any]:
     """Keep the header, the targets and, per version, the records and packages of
     ``packages``; the findings and the tool data are not needed.
     """
+    from sca_rules import norm
+
     keep = {norm(p) for p in packages}
     versions = [
         {
@@ -140,7 +137,8 @@ def plan_all(testbed: Path, output: Path) -> None:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(HERE.parents[1] / "actions" / "sca_fix_plan"))
+    for name in ("sca_fix_plan", "sca_rules"):
+        sys.path.insert(0, str(HERE.parents[1] / "actions" / name))
     if len(sys.argv) == 3 and sys.argv[1] == "cut":
         cut_all(Path(sys.argv[2]))
     elif len(sys.argv) == 4 and sys.argv[1] == "plan":

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import apply_codes as codes
-from scan import norm
+from sca_rules import norm
 
 PROOF = (
     "Each change was rescanned with Trivy and OSV: the targeted vulnerabilities are "

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from _sca_lib import read_json
-from normalize import norm
+from sca_rules import norm
 from vulns import components
 
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")

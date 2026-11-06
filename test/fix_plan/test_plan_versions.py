@@ -1,5 +1,5 @@
 import pytest
-from sca_fix_plan.versions import VersionError, compare, major
+from sca_rules import VersionError, compare, major
 
 OLDER_THAN = [
     ("1.2.16", "1.2.17"),
@@ -80,6 +80,11 @@ def test_error_names_the_version() -> None:
         ("0.4.0", (0, 4)),
         ("0", (0, 0)),
         ("3.5.8-r0", (3,)),
+        ("2024.8.30", ()),
+        ("2026.10.18", ()),
+        ("1000.0", ()),
+        ("999.1", (999,)),
+        ("24.1", (24,)),
     ],
 )
 def test_major(version: str, expected: tuple[int, ...]) -> None:

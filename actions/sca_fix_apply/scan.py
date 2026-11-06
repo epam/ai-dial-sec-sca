@@ -15,8 +15,9 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import apply_codes as codes
-from normalize import Findings, Inventory, norm, normalize_osv, normalize_trivy
+from normalize import Findings, Inventory, normalize_osv, normalize_trivy
 from query_osv import Runner, run_command, scan_target
+from sca_rules import norm
 from vulns import records_of
 
 # The scan profile of the scheduled scan (sca_scheduled.yml): exposure, not a gate,

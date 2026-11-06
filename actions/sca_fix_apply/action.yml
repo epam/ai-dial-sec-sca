@@ -83,8 +83,8 @@ runs:
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
-        # the scan engine the detector reuses (normalize, vulns, query_osv) and its shared package _sca_lib
-        PYTHONPATH: ${{ github.action_path }}/..:${{ github.action_path }}/../sca_merge_results:${{ github.action_path }}/../sca_query_osv
+        # the scan engine the detector reuses (normalize, vulns, query_osv), its shared package _sca_lib and the rules package sca_rules
+        PYTHONPATH: ${{ github.action_path }}/..:${{ github.action_path }}/../sca_rules:${{ github.action_path }}/../sca_merge_results:${{ github.action_path }}/../sca_query_osv
         COMMAND: ${{ inputs.command }}
         PLAN: ${{ inputs.plan }}
         BRANCH: ${{ inputs.branch }}

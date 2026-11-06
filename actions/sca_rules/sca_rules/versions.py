@@ -1,4 +1,4 @@
-"""Version comparison for the fix planner, standard library only.
+"""Version comparison for the fix planner and the scan engine, standard library only.
 
 One ordering for the versions of the scanned ecosystems (npm, PyPI, Maven, Alpine).
 The limits are deliberate: a version this module does not understand raises
@@ -23,6 +23,7 @@ would plan a downgrade or a version that does not fix anything.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 VersionKey = tuple[tuple[int, ...], int, int, int, str]
 
@@ -54,6 +55,7 @@ class VersionError(ValueError):
     """A version the comparison does not understand."""
 
 
+@lru_cache(maxsize=None)
 def release_part(version: str) -> tuple[int, ...]:
     """The leading numeric components: ``(3, 5, 8)`` for ``3.5.8-r0``."""
     match = _VERSION.match(version.strip())
@@ -62,6 +64,7 @@ def release_part(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+@lru_cache(maxsize=None)
 def version_key(version: str) -> VersionKey:
     """A sort key: ``(release, stage, qualifier number, revision, tail)``."""
     match = _VERSION.match(version.strip())
@@ -109,9 +112,14 @@ def compare(left: str, right: str) -> int:
 
 def major(version: str) -> tuple[int, ...]:
     """The major as a version scheme sees it: the first numeric component, or the
-    first two when it is 0 (``0.3.x`` and ``0.4.x`` are different majors).
+    first two when it is 0 (``0.3.x`` and ``0.4.x`` are different majors). A calendar
+    version (the first component is a full year: four digits or more, which no semver
+    major has) has no major: all calendar versions share the empty major ``()``, so a
+    newer year is not a major step. A two-digit year (``24.1``) keeps the semver rule.
     """
     release = release_part(version)
+    if release[0] >= 1000:
+        return ()
     if release[0] != 0:
         return release[:1]
     return (release + (0,))[:2]

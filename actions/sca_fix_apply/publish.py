@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -242,7 +243,12 @@ def open_pull_request(
             ],
             token=token,
         )
-        return {"head": head, "action": "updated", "url": found[0]["url"]}
+        return {
+            "head": head,
+            "action": "updated",
+            "url": found[0]["url"],
+            "number": found[0]["number"],
+        }
     url = run(
         [
             "gh",
@@ -261,4 +267,11 @@ def open_pull_request(
         ],
         token=token,
     )
-    return {"head": head, "action": "created", "url": url.splitlines()[-1]}
+    url = url.splitlines()[-1]
+    number = re.search(r"/pull/(\d+)$", url)
+    return {
+        "head": head,
+        "action": "created",
+        "url": url,
+        "number": int(number[1]) if number else None,
+    }

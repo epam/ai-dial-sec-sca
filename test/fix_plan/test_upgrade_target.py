@@ -137,3 +137,106 @@ def test_agrees_with_build_plan_on_real_fixtures(case: str, allow_major: str) ->
 
 def test_real_fixtures_give_targets_to_compare() -> None:
     assert sum(compare_with_plan(c, "dev-proven") for c in CASES) >= 10
+
+
+def test_rv1_a_candidate_must_be_safe_for_every_record() -> None:
+    # A is fixed on two branches, B in 2.20.0: 2.20.0 is still vulnerable to A
+    a = record("lib", "2.18.0", "2.18.11, 2.21.3", id="A")
+    b = record("lib", "2.18.0", "2.20.0", id="B")
+    assert upgrade_target("2.18.0", [a, b])[0] == "2.21.3"
+    # a development version is proven by development's own scan, not by the list
+    assert upgrade_target("2.18.0", [a, b], ["2.20.0", "2.22.0"]) == (
+        "2.20.0",
+        "development runs 2.20.0",
+        None,
+    )
+
+
+def test_rv1_a_fixed_version_of_the_branch_of_the_candidate_is_safe() -> None:
+    a = record("lib", "2.18.0", "2.18.11, 2.21.3", id="A")
+    assert upgrade_target("2.18.0", [a])[0] == "2.18.11"
+    b = record("lib", "2.18.0", "2.18.5", id="B")
+    assert upgrade_target("2.18.0", [a, b])[0] == "2.18.11"
+    assert upgrade_target("2.18.0", [a, b], ["2.18.12"])[0] == "2.18.12"
+    assert upgrade_target("2.18.0", [a, b], ["2.18.8"])[0] == "2.18.11"
+
+
+def test_rv1_a_record_with_one_fix_per_major_is_safe_in_its_own_major() -> None:
+    # express 4.17.1: one advisory fixed in 4.19.2 and 5.0.0-beta.3, another in 4.20.0
+    # and 5.0.0; 4.20.0 is at or above the highest fix of the 4.x line of the first
+    a = record("express", "4.17.1", "4.19.2, 5.0.0-beta.3", id="CVE-2024-29041")
+    b = record("express", "4.17.1", "4.20.0, 5.0.0", id="CVE-2024-43796")
+    assert upgrade_target("4.17.1", [a, b])[0] == "4.20.0"
+    assert upgrade_target("4.17.1", [a, b], allow_major="dev-proven")[0] == "4.20.0"
+
+
+def test_rv1_the_same_for_a_generic_per_major_pair() -> None:
+    a = record("lib", "1.0.0", "1.2.5, 2.0.1", id="A")
+    b = record("lib", "1.0.0", "1.3.0", id="B")
+    assert upgrade_target("1.0.0", [a, b])[0] == "1.3.0"
+
+
+def test_rv1_the_plan_case_still_needs_the_higher_branch() -> None:
+    a = record("lib", "2.18.0", "2.18.11, 2.21.3", id="A")
+    b = record("lib", "2.18.0", "2.20.0", id="B")
+    assert upgrade_target("2.18.0", [a, b])[0] == "2.21.3"
+
+
+def test_rv1_a_fix_only_in_another_major_is_needs_major() -> None:
+    a = record("lib", "2.18.0", "3.0.0", id="A")
+    b = record("lib", "2.18.0", "2.20.0, 3.1.0", id="B")
+    target, _, code = upgrade_target("2.18.0", [a, b])
+    assert (target, code) == (None, "needs_major")
+
+
+def test_equal_versions_prefer_the_spelling_of_the_installed_version() -> None:
+    three = record("lib", "1.2.3", "1.3, 1.3.0", id="A")
+    assert upgrade_target("1.2.3", [three])[0] == "1.3.0"
+    two = record("lib", "1.2", "1.3.0, 1.3", id="A")
+    assert upgrade_target("1.2", [two])[0] == "1.3"
+
+
+def test_equal_versions_with_the_same_distance_are_ordered_by_text() -> None:
+    # 1.3 and 1.3.0.0 are equally far from 1.2.3 in components; the text decides
+    a = record("lib", "1.2.3", "1.3.0.0, 1.3", id="A")
+    assert upgrade_target("1.2.3", [a])[0] == "1.3"
+    b = record("lib", "1.2.3", "1.3.0.0, 1.3", id="B")
+    assert upgrade_target("1.2.3", [b, a])[0] == "1.3"
+
+
+def test_c12_pins_the_spelling_of_the_installed_version() -> None:
+    # pip 26.1.2 is fixed in both "26.2" and "26.2.0" (equal versions): the three
+    # component spelling of the installed version wins
+    plan = build_plan(
+        merge_reports(
+            [json.loads(Path(p).read_text(encoding="utf-8")) for p in load_case("c12")]
+        ),
+        Config(),
+    )
+    targets = [
+        t["target"]
+        for line in plan["lines"]
+        for item in line["items"]
+        if item["pkg"] == "pip"
+        for t in item["targets"]
+    ]
+    assert targets and set(targets) == {"26.2.0"}
+
+
+def test_calendar_version_year_is_not_a_major() -> None:
+    rec = record("certifi", "2024.8.30", "2026.10.18")
+    assert upgrade_target("2024.8.30", [rec]) == (
+        "2026.10.18",
+        "lowest fixed version in the same major",
+        None,
+    )
+
+
+def test_semver_to_calendar_is_a_scheme_change() -> None:
+    rec = record("lib", "3.2.0", "2024.1")
+    assert upgrade_target("3.2.0", [rec])[2] == "needs_major"
+
+
+def test_two_digit_year_keeps_the_semver_major() -> None:
+    rec = record("pip", "24.0", "25.0")
+    assert upgrade_target("24.0", [rec])[2] == "needs_major"
