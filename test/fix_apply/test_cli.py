@@ -85,6 +85,7 @@ def test_publish_without_files_opens_nothing(tmp_path: Path) -> None:
     assert code == 0
     written = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert written["pr"] == {
+        "url": None,
         "number": None,
         "base": "b",
         "action": "none",
@@ -170,6 +171,7 @@ def test_n10_2_a_publish_error_still_writes_the_result(
     assert fix_apply.main(publish_args(tmp_path)) == 1
     written = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert written["pr"] == {
+        "url": None,
         "number": None,
         "base": "b",
         "action": "failed",
