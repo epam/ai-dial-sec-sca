@@ -7,11 +7,19 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sca_rules import VersionError, choose_target, compare
+from sca_rules import (
+    INCOMPLETE,
+    OPEN,
+    VersionError,
+    choose_target,
+    compare,
+    key_of,
+    usable,
+)
 
 from . import plan_codes as codes
 from .config import Config
-from .development import INCOMPLETE, OPEN, development_of, key_of, usable
+from .development import development_of
 from .lines import select_lines
 from .reports import Reports, Version, development_version
 

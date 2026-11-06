@@ -158,11 +158,24 @@ def merged_scan_tag(tmp_path: Path) -> bytes:
     return (tmp_path / "out" / "report.json").read_bytes()
 
 
+def without_upgrades(raw: bytes, scratch: Path) -> bytes:
+    """``report.json`` without the ``upgrades`` of its records (the v0.8.0 bytes of a
+    report that has every other field), in the engine's own dump format.
+    """
+    report = json.loads(raw)
+    for version in report["versions"]:
+        for record in version["vulns"]:
+            del record["upgrades"]
+    dump_json(scratch / "before.json", report)
+    return (scratch / "before.json").read_bytes()
+
+
 def as_before(raw: bytes, scratch: Path) -> bytes:
     """``report.json`` as the engine wrote it before the fields of the report
     additions: ``src_pkg`` and ``summary`` of the findings, ``role`` of a version,
     ``pkg_key`` and ``src_pkg`` of a vulnerability record and a package, ``title``
-    of a record, removed. Same key order and format as the engine's own dump.
+    of a record, ``upgrades`` of a record, removed. Same key order and format as the
+    engine's own dump.
     """
     report = json.loads(raw)
     for finding in report["findings"]:
@@ -170,7 +183,7 @@ def as_before(raw: bytes, scratch: Path) -> bytes:
     for version in report["versions"]:
         del version["role"]
         for record in version["vulns"]:
-            del record["pkg_key"], record["src_pkg"], record["title"]
+            del record["pkg_key"], record["src_pkg"], record["title"], record["upgrades"]
         for package in version["packages"]:
             del package["pkg_key"], package["src_pkg"]
     dump_json(scratch / "before.json", report)
@@ -183,4 +196,6 @@ if __name__ == "__main__":
 
     GOLDEN.parent.mkdir(exist_ok=True)
     GOLDEN.write_bytes(as_before(merged(Path(sys.argv[1]) / "a"), Path(sys.argv[1])))
-    GOLDEN_SCAN_TAG.write_bytes(merged_scan_tag(Path(sys.argv[1]) / "b"))
+    GOLDEN_SCAN_TAG.write_bytes(
+        without_upgrades(merged_scan_tag(Path(sys.argv[1]) / "b"), Path(sys.argv[1]))
+    )

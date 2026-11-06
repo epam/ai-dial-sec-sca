@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sca_rules import INCOMPLETE, OPEN, Development, identifiers, key_of, norm, usable
+from sca_rules import Development, identifiers, norm
 
 from .config import Config
 from .lines import select_lines

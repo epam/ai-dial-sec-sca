@@ -12,7 +12,15 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from normalize import SEVERITIES, PackageSet
-from sca_rules import norm
+from sca_rules import (
+    FIXED,
+    Development,
+    VersionError,
+    fixed_versions,
+    norm,
+    upgrade_target,
+    version_key,
+)
 
 Finding = Mapping[str, Any]
 
@@ -276,6 +284,120 @@ def set_roles(versions: Sequence[dict[str, Any]]) -> None:
         v["role"] = role
 
 
+def upgrade_order(installed: str) -> tuple[bool, Any, str]:
+    """Sort key of an installed version: version order, unparsable versions last in
+    string order.
+    """
+    try:
+        return False, version_key(installed), installed
+    except VersionError:
+        return True, (), installed
+
+
+def development_of(
+    report: Mapping[str, Any], versions: Sequence[Mapping[str, Any]]
+) -> Development | None:
+    """The development data of the run: the union of its development versions (their
+    targets, packages and records), or None when the run has none.
+    """
+    devs = [v for v in versions if v["kind"] == "development"]
+    if not devs:
+        return None
+    ids = {i for v in devs for i in v["targets"]}
+    trivy = {
+        t["id"]: t
+        for t in report["targets"]
+        if t["scanner"] == "trivy" and t["id"] in ids
+    }
+    twins: dict[str, list[str]] = {}
+    for t in report["targets"]:
+        if t["scanner"] != "trivy" and t["id"] in ids:
+            twins.setdefault(t["id"], []).append(t["status"])
+    return Development.of(
+        trivy,
+        twins,
+        [p for v in devs for p in v["packages"]],
+        [r for v in devs for r in v["vulns"]],
+    )
+
+
+def upgrade_of(
+    installed: str,
+    record: Mapping[str, Any],
+    same: Sequence[Mapping[str, Any]],
+    dev: Sequence[str],
+) -> dict[str, Any]:
+    """The entry of ``upgrades`` of ``record`` for ``installed``. ``same`` are the
+    records of the package in the version, ``dev`` the versions development runs
+    when it fixes all of the records that contain ``installed`` (else empty).
+    """
+    entry = {"installed": installed, "target": None, "reason": None}
+    if record["class"] == "os":
+        entry["reason"] = "image_rebuild" if fixed_versions(record) else "no_fixed_version"
+        return entry
+    target, _, reason = upgrade_target(installed, [record], ())
+    if reason == "no_fixed_version":  # no fix above this version for this record
+        entry["reason"] = reason
+        return entry
+    target, _, reason = upgrade_target(installed, same, dev)
+    entry["target"], entry["reason"] = target, reason
+    return entry
+
+
+def set_upgrades(
+    versions: Sequence[dict[str, Any]], report: Mapping[str, Any]
+) -> None:
+    """``upgrades`` of every record: per installed version of the record ``target``,
+    the version to upgrade to by the rule of the fix plan (``sca_rules.upgrade_target``
+    over the records of the same package and class in the same version), and ``reason``
+    (null exactly when there is a target): ``needs_major``, ``no_fixed_version``,
+    ``version_unparsable``, or ``image_rebuild`` (an ``os`` record with a fixed
+    version). A record with no fixed version above an installed version has
+    ``no_fixed_version`` for it, whatever the other records give. The versions
+    development runs are the evidence for the target only when development fixes every
+    record that contains the installed version.
+    """
+    installed: dict[tuple[str, str], set[str]] = {}
+    for version in versions:
+        if version["kind"] == "development":
+            for p in version["packages"]:
+                installed.setdefault((p["class"], p["pkg_key"]), set()).update(
+                    p["installed"]
+                )
+    development = development_of(report, versions)
+    for version in versions:
+        trivy = {
+            t["id"]: t
+            for t in report["targets"]
+            if t["scanner"] == "trivy" and t["id"] in version["targets"]
+        }
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for v in version["vulns"]:
+            groups.setdefault((v["class"], v["pkg_key"]), []).append(v)
+        states = {
+            id(r): development.state(r, trivy)[0]
+            if development and version["kind"] != "development"
+            else None
+            for r in version["vulns"]
+        }
+        for (cls, key), same in groups.items():
+            runs = sorted(installed.get((cls, key), ()))
+            for record in same:
+                record["upgrades"] = [
+                    upgrade_of(
+                        i,
+                        record,
+                        same,
+                        runs
+                        if all(
+                            states[id(r)] == FIXED for r in same if i in r["installed"]
+                        )
+                        else (),
+                    )
+                    for i in sorted(record["installed"], key=upgrade_order)
+                ]
+
+
 def build_versions(
     report: Mapping[str, Any],
     package_sets: Mapping[str, PackageSet],
@@ -349,6 +471,7 @@ def build_versions(
             set(version["targets"]), version["vulns"], keys, package_sets, ok, sources
         )
     set_roles(result)
+    set_upgrades(result, report)
     ok_releases = (
         v
         for v in result

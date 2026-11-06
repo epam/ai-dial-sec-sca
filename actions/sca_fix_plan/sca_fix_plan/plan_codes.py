@@ -7,7 +7,12 @@ spelled.
 
 from __future__ import annotations
 
-from sca_rules.target import NEEDS_MAJOR, NO_FIXED_VERSION, VERSION_UNPARSABLE
+# these three are spelled in sca_rules (the target rule returns them)
+from sca_rules.target import (  # noqa: F401
+    NEEDS_MAJOR,
+    NO_FIXED_VERSION,
+    VERSION_UNPARSABLE,
+)
 
 ACCEPTED = "accepted"
 NOT_FIXED_IN_DEVELOPMENT = "not_fixed_in_development"

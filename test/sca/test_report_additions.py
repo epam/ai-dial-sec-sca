@@ -198,7 +198,7 @@ def test_the_merged_report_carries_the_new_fields_at_the_end_of_each_object(tmp_
     assert dev["role"] == "dev" and versions["1.0.0"]["role"] == "rel"
     assert list(dev)[-3:] == ["vulns", "packages", "role"]
     records = {v["id"]: v for v in dev["vulns"]}
-    assert list(records["CVE-2026-1"])[-3:] == ["pkg_key", "src_pkg", "title"]
+    assert list(records["CVE-2026-1"])[-4:] == ["pkg_key", "src_pkg", "title", "upgrades"]
     assert records["CVE-2026-1"]["title"] == "A flaw in a"
     assert records["CVE-2026-2"]["pkg_key"] == "py-b"
     assert records["CVE-2026-2"]["title"] is None

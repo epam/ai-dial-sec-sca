@@ -333,7 +333,8 @@ def test_a_scan_tag_run_reads_the_ignore_file_of_the_tag_and_an_image_only_run_h
 
 
 def test_a_scan_tag_run_matches_its_golden_report(tmp_path):
-    from golden_case import GOLDEN_SCAN_TAG, merged_scan_tag
+    from golden_case import GOLDEN_SCAN_TAG, merged_scan_tag, without_upgrades
 
-    assert merged_scan_tag(tmp_path) == GOLDEN_SCAN_TAG.read_bytes()
+    out = without_upgrades(merged_scan_tag(tmp_path), tmp_path)
+    assert out == GOLDEN_SCAN_TAG.read_bytes()
     assert json.loads(GOLDEN_SCAN_TAG.read_bytes())["ignores_error"] is None
