@@ -37,6 +37,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+# the shared rules: actions/sca_rules (the directory that holds the package) must be on
+# PYTHONPATH; with only actions/ it is an empty namespace package
+try:
+    from sca_rules import norm as _norm  # noqa: F401
+except ImportError as error:
+    raise SystemExit(
+        "sca_merge_results needs the package sca_rules: put actions/sca_rules (the directory that "
+        f"contains the sca_rules package) on PYTHONPATH ({error})"
+    ) from error
+
 from _sca_lib import append_text, dump_json, escape_command_data, format_time, read_json
 from ignores import add_acceptances, add_ignores
 from normalize import (

@@ -28,6 +28,16 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+# the shared rules: actions/sca_rules (the directory that holds the package) must be on
+# PYTHONPATH; with only actions/ it is an empty namespace package
+try:
+    from sca_rules import norm as _norm  # noqa: F401
+except ImportError as error:
+    raise SystemExit(
+        "sca_fix_apply needs the package sca_rules: put actions/sca_rules (the directory that "
+        f"contains the sca_rules package) on PYTHONPATH ({error})"
+    ) from error
+
 import apply_codes as codes
 from apply import Tools, dockerfiles, process_line
 from dependabot import JobError, Outcome, Settings, run_job

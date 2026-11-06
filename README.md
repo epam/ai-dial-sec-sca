@@ -14,7 +14,7 @@ These actions are called by the `sca_scheduled.yml` workflow of [epam/ai-dial-ci
 - `actions/sca_fix_plan` and `actions/sca_fix_apply`: the fixer, see Fixer below.
 - `actions/sca_rules`: the rules the engine and the fixer share (package key, version order, upgrade target, fixed-in-development state of a record), see Shared rules below.
 
-The actions share the code in `actions/_sca_lib` (it is imported through `PYTHONPATH=${{ github.action_path }}/..`, so the `actions/` layout must stay as it is) and the package in `actions/sca_rules` (the `PYTHONPATH` of each action that uses it lists `actions/sca_rules` too).
+The actions share the code in `actions/_sca_lib` (it is imported through `PYTHONPATH=${{ github.action_path }}/..`, so the `actions/` layout must stay as it is) and the package in `actions/sca_rules` (the `PYTHONPATH` of each action that uses it lists `actions/sca_rules` too). A caller that runs the scripts outside the actions MUST put `actions/sca_rules` itself on `PYTHONPATH`, not only `actions/`: there `actions/sca_rules` is an empty namespace package, and the scripts stop with a message saying so.
 
 ## Inputs
 
