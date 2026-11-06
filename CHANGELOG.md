@@ -24,7 +24,7 @@
 - Intended change, without a new input: in a scan-tag run (the only source target is a tag, not the default branch) the `.trivyignore` of that tag is read and marks the records, as described in the previous item; the golden report `report_scan_tag.json` records it. Consumers of `ignores` and `ignores_error` see the tag's file there.
 - `sca_merge_results`: the grouping of findings into records is the function `records_of` in `vulns.py` (internal refactor, the output is byte-identical).
 - `ignores_error` is `null` for a run without any source target (images only); it was an error text.
-- `summary.md`: a row lists at most 5 vulnerability ids and then `+N more`, the link text is the record id, and a commit shared by several source targets is listed once under `Seen in`. `report.json` is not affected.
+- `summary.md`: a row lists at most 5 vulnerability ids and then `+N more`, and a commit shared by several source targets is listed once under `Seen in`. `report.json` is not affected.
 - Trivy is installed from the aquasecurity/trivy GitHub release of `trivy-version` (sha256 of the archive pinned per version in the engine, else `trivy-sha256`; cached by version, OS and architecture; the cached archive is verified again on every run) instead of `aquasecurity/setup-trivy`, which downloaded from `get.trivy.dev`.
 - ORAS CLI 1.3.4 (was 1.3.3) and `oras-project/setup-oras` v2.0.3 in `sca_resolve_targets`.
 
