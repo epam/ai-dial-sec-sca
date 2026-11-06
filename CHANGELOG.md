@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.8.1
+
+`report.json` stays at `schema_version` 4; the two new fields are additive and appended at the end of a record. Without them the report is the v0.8.0 report byte for byte.
+
+### Added
+
+- `versions[].vulns[].upgrades`: per installed version of a record, the target version by the rule of the fix plan, or the `reason` there is none (`needs_major`, `no_fixed_version`, `version_unparsable`, `image_rebuild`).
+- `versions[].vulns[].dev_state`: `fixed`, `removed`, `open` or `incomplete`, the state `sca_fix_plan.classify` gives; `null` on development records and without a development version.
+- `actions/sca_rules`: an installable package with the rules the engine and the fixer share (package key, version order, upgrade target, fixed-in-development state). `sca_fix_plan` needs it installed next to it and fails at import with a message when it is missing; the actions put it on `PYTHONPATH`.
+- `result.json` of `sca_fix_apply`: `pr.number` and `pr.base`; the file is documented as the contract for consumers (README).
+
+### Changed
+
+- The target rule: a target must not be vulnerable to any other record of the package (a candidate is at or above the highest fixed version of each record, or at or above a fixed version of its own major.minor), and versions that compare equal (`1.2`, `1.2.0`) are chosen by their text, the same on every run. The plan can differ from v0.8.0 for a package whose records are fixed on different branches.
+- The development data of a record must be complete in each kind of target the record was found in: a library found in an image is judged by the development image of the same image as well, not by the source scan alone. A library found only in an image is now `development_data_incomplete` when the development image scan failed.
+- The package key, the version order, the target rule and the development state live once in `sca_rules`; `sca_fix_plan.versions` is gone (its names are in `sca_rules`).
+
 ## v0.8.0
 
 `report.json` stays at `schema_version` 4. Every change to it is additive (new optional fields); no field is renamed, retyped or removed. Without the new inputs the report differs from v0.7.0 only by the new fields and by one intended change: the `.trivyignore` rule of a scan-tag run (see Changed).

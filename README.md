@@ -12,8 +12,9 @@ These actions are called by the `sca_scheduled.yml` workflow of [epam/ai-dial-ci
 - `actions/_install_trivy`: installs Trivy from the GitHub release of `version` (same rules and the same optional `trivy-sha256` as in `sca_query_osv`); `sca_query_osv` repeats its steps and shares its `install.sh`, because a composite action cannot use a sibling action by a relative path.
 - `actions/generate_gradle_lockfiles`: generates Gradle lockfiles on the fly so Trivy can resolve Gradle dependencies (repository files are not modified).
 - `actions/sca_fix_plan` and `actions/sca_fix_apply`: the fixer, see Fixer below.
+- `actions/sca_rules`: the rules the engine and the fixer share (package key, version order, upgrade target, fixed-in-development state of a record), see Shared rules below.
 
-The actions share the code in `actions/_sca_lib` (it is imported through `PYTHONPATH=${{ github.action_path }}/..`, so the `actions/` layout must stay as it is).
+The actions share the code in `actions/_sca_lib` (it is imported through `PYTHONPATH=${{ github.action_path }}/..`, so the `actions/` layout must stay as it is) and the package in `actions/sca_rules` (the `PYTHONPATH` of each action that uses it lists `actions/sca_rules` too).
 
 ## Inputs
 
@@ -83,11 +84,26 @@ The fixer turns the schema 4 reports into pull requests that bump the vulnerable
 - `actions/sca_fix_plan` (input `reports`: the `report.json` files of one repo; `config`: the policy as JSON; `output-dir`): plans which records of which versions become fix items, with the target version and the method (`dependabot`, `npm-override`, opt-in `docker-tag`; anything else is `manual` with a reason code). It writes `fix-plan.json` (schema 2) and `fix-plan.md`. A pure function of the reports and the configuration: no network, no git.
 - `actions/sca_fix_apply` (input `command`: `apply`, `publish`, `node` or `summary`): `apply` runs the automated items of one plan line on a checked-out branch (Dependabot CLI jobs, the npm override step, the base image bump) and proves each change with a rescan by the same detector as the scan (Trivy and OSV from one database state, records built by `records_of` of the engine); `publish` pushes the fix branch the fixer owns and opens or updates one pull request; `node` reads the node version of a branch; `summary` writes the job summary of all lines.
 
-`sca_fix_plan` is also an installable package (`actions/sca_fix_plan`, standard library only, no side effects on import, `__version__` 1.0.0) with this public API:
+`sca_fix_plan` is also an installable package (`actions/sca_fix_plan`, standard library only, no side effects on import, `__version__` 1.0.0). It needs the package `sca_rules` of the same tag; install both (the planner fails at import with a message when `sca_rules` is missing):
+
+```sh
+pip install "git+https://github.com/epam/ai-dial-sec-sca@v0.8.1#subdirectory=actions/sca_rules"
+pip install "git+https://github.com/epam/ai-dial-sec-sca@v0.8.1#subdirectory=actions/sca_fix_plan"
+```
+
+Public API:
 
 - `build_plan(reports, config)`: the fix plan (`reports` from `merge_reports`, `config` from `parse_config`).
 - `classify(...)`: the state of every record in the planned lines: fixed, removed or open in development, or incomplete data.
-- `upgrade_target(installed, records, dev_versions=(), allow_major="none")`: the target version the plan rule gives for one installed version of a package, as `(target, evidence, reason_code)`. `records` are the records of that package; the required version is the highest over the records of their lowest fixed version above `installed`; the target is the lowest development version at or above it, else the lowest fixed version at or above it, in the major of `installed` (`allow_major="dev-proven"` also takes a development version of another major). Without a target, `target` is `None`, `evidence` the reason and `reason_code` one of `no_fixed_version`, `needs_major` or `version_unparsable` (a version that cannot be compared is returned, not raised). `build_plan` uses the same rule, so the two cannot differ.
+- `upgrade_target(installed, records, dev_versions=(), allow_major="none")`: the target version the plan rule gives for one installed version of a package, as `(target, evidence, reason_code)`. `records` are the records of that package; the required version is the highest over the records of their lowest fixed version above `installed`; the target is the lowest development version at or above it, else the lowest fixed version at or above it, in the major of `installed` (`allow_major="dev-proven"` also takes a development version of another major), and not vulnerable to any of the records (at or above the highest fixed version of each record, or at or above a fixed version of the same major.minor). Without a target, `target` is `None`, `evidence` the reason and `reason_code` one of `no_fixed_version`, `needs_major` or `version_unparsable` (a version that cannot be compared is returned, not raised). `build_plan` uses the same rule, so the two cannot differ.
+
+### Shared rules
+
+`actions/sca_rules` (standard library only, `__version__` 0.8.1, the engine release) holds the one implementation of: `norm` (the package key), `version_key`, `compare`, `major` and the rest of the version order, `choose_target` and `upgrade_target` (the target rule above), and `Development` (the state of a record against the development version: `fixed`, `removed`, `open` or `incomplete`). The engine, the planner and the applier import it; `sca_fix_plan` re-exports `upgrade_target`.
+
+### result.json
+
+`sca_fix_apply` writes one `result.json` per release line, uploaded as the workflow artifact `fix-result-<slug>` (`slug` = the release branch with `/` replaced by `-`). `schema_version` is 1; fields are only added within a version. Per item of `items[]`: `pkg`, `status` (`applied`, `already_fixed`, `manual`), `reason_code` (`null` for `applied`), `changes[]` (`name`, `from`, `to`, `directory`) and `fixed_with`. `docker` is the base image step (its `changes[]`, `files`, `builds`); an `os` item left to an image rebuild has `reason_code` `needs_image_rebuild`. `pr` is `{action, url, number, base, reason_code}`: `action` is `none`, `created`, `updated` or `failed`, `number` the pull request number (`null` without one), `base` the release branch it targets.
 
 ## Tests
 
@@ -128,6 +144,9 @@ Fields added to the end of the objects of `versions[]` (the new fields of `findi
 - `src_pkg` on `vulns[]` and `packages[]`: the Trivy source package (`SrcName`) of an OS package, `null` for a language package or when Trivy gives none; `pkg` of an OS record stays the binary name. A record takes the value of its first Trivy finding that has one; a package the first value any of its records has.
 - `title` on `vulns[]`: the Trivy `Title` of the record's findings, else the OSV `summary` (never its details), whitespace collapsed to single spaces; the first non-empty, Trivy first; `null` when there is none.
 
+- `upgrades` on `vulns[]` (v0.8.1): per value of the record's `installed`, in version order (versions that cannot be parsed last, in string order), `{installed, target, reason}`. `target` is the version to upgrade to by the rule of the fix plan (`sca_rules.upgrade_target` over the records of the same package and class in the same version; the versions the development versions run are the evidence, and only when development fixes every record of the version that contains this installed version); `reason` is `null` exactly when `target` is set, else `needs_major`, `no_fixed_version`, `version_unparsable` or, for an `os` record with a fixed version, `image_rebuild`. A record with no fixed version above an installed version has `no_fixed_version` for it whatever the other records give.
+- `dev_state` on `vulns[]` (v0.8.1): what the development versions say about the record: `fixed`, `removed`, `open` or `incomplete` (development was not scanned completely in every kind of target the record was found in), the same state `sca_fix_plan.classify` gives; `null` on the records of a development version and when the run has no development version. Several development versions count as their union.
+
 ### Fields added in v0.8.0
 
 `schema_version` stays 4: every addition is a new optional field or input; nothing is renamed, retyped or removed, and a report made without the new inputs differs from v0.7.0 only by these fields.
@@ -144,6 +163,8 @@ Fields added to the end of the objects of `versions[]` (the new fields of `findi
 | `acceptances[]` | list | The rules of the caller with `expired`, `bad_expiry`, `bad_rule`, `matched`; only when `targets.json` has `acceptances`. |
 | `findings[].accepted` | object | `{until, reason, rule}`; only on a finding a rule accepted. |
 | `findings[].summary` | string or null | The OSV `summary`; `null` for Trivy. |
+| `versions[].vulns[].upgrades` | list | v0.8.1: `{installed, target, reason}` per installed version of the record. |
+| `versions[].vulns[].dev_state` | string or null | v0.8.1: `fixed`, `removed`, `open`, `incomplete` or `null`. |
 | `findings[].src_pkg` | string or null | The Trivy `SrcName`; `null` otherwise. |
 | `ignores_error` | string or null | `null` also when the run has no source target (images only). |
 
