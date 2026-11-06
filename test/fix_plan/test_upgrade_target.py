@@ -144,7 +144,12 @@ def test_rv1_a_candidate_must_be_safe_for_every_record() -> None:
     a = record("lib", "2.18.0", "2.18.11, 2.21.3", id="A")
     b = record("lib", "2.18.0", "2.20.0", id="B")
     assert upgrade_target("2.18.0", [a, b])[0] == "2.21.3"
-    assert upgrade_target("2.18.0", [a, b], ["2.20.0", "2.22.0"])[0] == "2.22.0"
+    # a development version is proven by development's own scan, not by the list
+    assert upgrade_target("2.18.0", [a, b], ["2.20.0", "2.22.0"]) == (
+        "2.20.0",
+        "development runs 2.20.0",
+        None,
+    )
 
 
 def test_rv1_a_fixed_version_of_the_branch_of_the_candidate_is_safe() -> None:

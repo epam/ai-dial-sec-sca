@@ -44,7 +44,7 @@ def test_a_version_that_cannot_be_compared_is_version_unparsable():
 
 def test_the_version_development_runs_is_preferred_to_the_lowest_fixed_version():
     sets = {"dev": {("lang", "lib", "1.4")}}
-    got = upgrades([row("CVE-1", "1.2")], package_sets=sets)
+    got = upgrades([row("CVE-1", "1.2, 1.5")], package_sets=sets)
     assert got == {"CVE-1": [entry("1.0", "1.4")]}
 
 
@@ -109,13 +109,6 @@ def test_reason_is_null_exactly_when_there_is_a_target():
     for entries in upgrades(rows).values():
         for e in entries:
             assert (e["reason"] is None) == (e["target"] is not None)
-
-
-def test_rv1_the_development_version_must_be_safe_for_every_record():
-    # 1.4 is neither above the highest fixed version nor a fix of its own branch
-    sets = {"dev": {("lang", "lib", "1.4")}}
-    got = upgrades([row("CVE-1", "1.2, 1.5")], package_sets=sets)
-    assert got == {"CVE-1": [entry("1.0", "1.2")]}
 
 
 def test_rv2_a_record_without_a_fix_above_the_version_is_no_fixed_version():

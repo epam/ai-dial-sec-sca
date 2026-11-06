@@ -13,7 +13,7 @@
 
 ### Changed
 
-- The target rule: a target must not be vulnerable to any other record of the package (a candidate is at or above the highest fixed version of each record, or at or above a fixed version of its own major.minor), and versions that compare equal (`1.2`, `1.2.0`) are chosen by their text, the same on every run. The plan can differ from v0.8.0 for a package whose records are fixed on different branches.
+- The target rule: a target taken from the fixed versions must not be vulnerable to any other record of the package (it is at or above the highest fixed version of each record, or at or above a fixed version of its own major.minor); a development version is the target as before, and versions that compare equal (`1.2`, `1.2.0`) are chosen by their text, the same on every run. The plan can differ from v0.8.0 for a package whose records are fixed on different branches.
 - The development data of a record must be complete in each kind of target the record was found in: a library found in an image is judged by the development image of the same image as well, not by the source scan alone. A library found only in an image is now `development_data_incomplete` when the development image scan failed.
 - The package key, the version order, the target rule and the development state live once in `sca_rules`; `sca_fix_plan.versions` is gone (its names are in `sca_rules`).
 

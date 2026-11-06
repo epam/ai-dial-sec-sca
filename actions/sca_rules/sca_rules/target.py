@@ -49,9 +49,10 @@ def choose_target(
 ) -> tuple[str | None, str, str | None]:
     """The target version for one installed version: ``(target, evidence, None)`` or
     ``(None, reason, reason_code)``. Raises ``VersionError`` for a version it cannot
-    compare. A candidate (a development version, else a fixed version) must be at or
-    above ``required`` and safe for every record that has a fixed version above
-    ``installed`` (``safe_for``).
+    compare. A development version at or above ``required`` is the target as it is
+    (development's own scan proves it; the caller passes only versions of a
+    development that fixes every record). A fixed version must also be safe for every
+    record that has a fixed version above ``installed`` (``safe_for``).
     """
     applicable = [r for r in records if installed in r["installed"]]
     fixes = sorted(
@@ -70,18 +71,14 @@ def choose_target(
     if required is None:
         return None, f"no fixed version above {installed}", NO_FIXED_VERSION
     same_major = major(installed)
-    safe = {
-        c
-        for c in (*dev_versions, *fixes)
-        if all(safe_for(c, r) for r in fixable)
-    }
+    safe = {f for f in fixes if all(safe_for(f, r) for r in fixable)}
     from_dev = sorted(
         (v for v in dev_versions if compare(v, required) >= 0), key=ordered
     )
     allowed = [
         v
         for v in from_dev
-        if v in safe and (major(v) == same_major or allow_major == "dev-proven")
+        if major(v) == same_major or allow_major == "dev-proven"
     ]
     if allowed:
         return allowed[0], f"development runs {allowed[0]}", None
@@ -114,7 +111,8 @@ def upgrade_target(
     above ``installed``. The target is the lowest ``dev_versions`` entry at or above
     it, else the lowest fixed version at or above it, each in the major of
     ``installed`` (``allow_major="dev-proven"`` also takes a development version of
-    another major), and not vulnerable to any of the records (``safe_for``). ``evidence`` is a plain string; ``reason_code`` is
+    another major); a fixed version must also not be vulnerable to any of the records
+    (``safe_for``). ``evidence`` is a plain string; ``reason_code`` is
     ``no_fixed_version``, ``needs_major`` or ``version_unparsable`` (a version that
     cannot be compared: the result is returned, not raised). ``ValueError`` for an
     ``allow_major`` that is not ``none`` or ``dev-proven``.
