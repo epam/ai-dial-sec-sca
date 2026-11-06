@@ -319,3 +319,36 @@ def test_n7_3_closed_unmerged_reads_the_newest_pull_request(
     assert publish_module.closed_unmerged("o/r", "b", "h", "t") is False
     assert publish_module.closed_unmerged("o/r", "b", "h", "t") is False
     assert "--limit" in seen[0] and "all" in seen[0]
+
+
+def test_u2_a_created_pull_request_carries_its_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answers = iter(["[]", "https://github.com/o/r/pull/42"])
+    monkeypatch.setattr(publish_module, "run", lambda *args, **kw: next(answers))
+    pr = publish_module.open_pull_request("o/r", "b", "h", "t", tmp_path / "b", "")
+    assert pr == {
+        "head": "h",
+        "action": "created",
+        "url": "https://github.com/o/r/pull/42",
+        "number": 42,
+    }
+
+
+def test_u2_an_updated_pull_request_carries_its_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listed = '[{"number": 7, "url": "https://github.com/o/r/pull/7"}]'
+    answers = iter([listed, ""])
+    monkeypatch.setattr(publish_module, "run", lambda *args, **kw: next(answers))
+    pr = publish_module.open_pull_request("o/r", "b", "h", "t", tmp_path / "b", "")
+    assert pr["action"] == "updated" and pr["number"] == 7
+
+
+def test_u2_a_url_without_a_number_gives_a_null_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answers = iter(["[]", "created somewhere"])
+    monkeypatch.setattr(publish_module, "run", lambda *args, **kw: next(answers))
+    pr = publish_module.open_pull_request("o/r", "b", "h", "t", tmp_path / "b", "")
+    assert pr["number"] is None

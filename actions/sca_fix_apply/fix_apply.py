@@ -165,6 +165,8 @@ def cmd_publish(args: argparse.Namespace) -> int:
                 "reason": str(exc),
                 "reason_code": codes.PR_FAILED,
             }
+    # the pull request number (null without one) and its base branch, for consumers
+    result["pr"] = {"number": None, "base": args.branch, **result["pr"]}
     write_json(args.output_dir / "result.json", result)
     print(json.dumps(result["pr"]))
     return 1 if result["pr"]["action"] == "failed" else 0
