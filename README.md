@@ -14,7 +14,7 @@ These actions are called by the `sca_scheduled.yml` workflow of [epam/ai-dial-ci
 - `actions/sca_fix_plan` and `actions/sca_fix_apply`: the fixer, see Fixer below.
 - `src/sca/rules`: the rules the engine and the fixer share (package key, version order, upgrade target, fixed-in-development state of a record), see Shared rules below.
 
-The code is one Python distribution, `ai-dial-sec-sca` (`pyproject.toml`, import package `src/sca`, no runtime dependencies, Python 3.12): `sca.lib` (run context, output files), `sca.targets`, `sca.osv`, `sca.merge`, `sca.plan`, `sca.rules`, `sca.fix`. `pip install .` gives the `sca` command with the subcommands `targets`, `osv`, `merge` and `plan`; the composite actions do not install it, they run `python -m sca <command>` with `PYTHONPATH` set to `src`, so the layout of the repository must stay as it is. The GitHub side is a standard-library script run by path, `actions/_github/github_adapter.py`; it is not part of the package, which prints no platform syntax.
+The code is one Python distribution, `ai-dial-sec-sca` (`pyproject.toml`, import package `src/sca`, no runtime dependencies, Python 3.12): `sca.lib` (run context, output files), `sca.targets`, `sca.osv`, `sca.merge`, `sca.plan`, `sca.rules`, `sca.fix`. `pip install .` gives the `sca` command with the subcommands `targets`, `osv`, `merge` and `plan`; the composite actions do not install it, they run `python -P -m sca <command>` (`-P` keeps the checked-out workspace off the import path) with `PYTHONPATH` set to `src`, so the layout of the repository must stay as it is. The GitHub side is a standard-library script run by path, `actions/_github/github_adapter.py`; it is not part of the package, which prints no platform syntax.
 
 ## Inputs
 
@@ -71,7 +71,6 @@ The scripts of the engine read no `GITHUB_*` variable and print no workflow comm
 | `SCA_RUN_URL` | yes | `<server_url>/<repository>/actions/runs/<run_id>`; the run URL is never built by the scripts |
 | `SCA_RUN_EVENT` | yes | `github.event_name`, copied to `event` as it is |
 | `SCA_RUN_ACTOR` | yes | `github.triggering_actor` |
-| `SCA_RUN_DEFAULT_BRANCH` | no | `github.event.repository.default_branch` |
 | `SCA_RUN_ENGINE_REF` | no | the `engine-ref` input if set, else the ref in the runner path of the action |
 
 `sca_resolve_targets` and `sca_merge_results` need the required variables (exit code 2 and a message naming the missing ones otherwise); the host is written as `host` next to `repository` into `targets.json` and `report.json` (a `host` already in `targets.json` wins). `sca_resolve_targets` reads the GitHub token from `GH_TOKEN` and takes the inputs as arguments (`--repository`, `--registry`, `--images`, `--osv-image-scan`, `--force-image-scan`, `--release-lines`, `--scan-tag`, `--output-dir`).
@@ -137,7 +136,7 @@ Public API:
 ## Tests
 
 ```sh
-python -m pip install pytest
+pip install -e . pytest jsonschema
 python -m pytest test/sca test/fix_plan test/fix_apply
 ```
 
@@ -173,7 +172,7 @@ Fields added to the end of the objects of `versions[]` (the new fields of `findi
 - `src_pkg` on `vulns[]` and `packages[]`: the Trivy source package (`SrcName`) of an OS package, `null` for a language package or when Trivy gives none; `pkg` of an OS record stays the binary name. A record takes the value of its first Trivy finding that has one; a package the first value any of its records has.
 - `title` on `vulns[]`: the Trivy `Title` of the record's findings, else the OSV `summary` (never its details), whitespace collapsed to single spaces; the first non-empty, Trivy first; `null` when there is none.
 
-- `upgrades` on `vulns[]` (v0.8.1): per value of the record's `installed`, in version order (versions that cannot be parsed last, in string order), `{installed, target, reason}`. `target` is the version to upgrade to by the rule of the fix plan (`sca_rules.upgrade_target`, `allow_major` none, over all records of the same package and class in the same version that contain this installed version; the versions the development versions run are the evidence, and only when development fixes every one of those records). It is the package-wide fact: the target of a plan or pull request can differ from it (filters, accepted records, `allow-major`, several development versions); `reason` is `null` exactly when `target` is set, else `needs_major` (major: the first component, the first two for `0.x`, none for a calendar version whose first component has four digits or more), `no_fixed_version`, `version_unparsable` or, for an `os` record with a fixed version, `image_rebuild`. Within one version, package and installed version: with development evidence every record gets the group's target (or reason); without it a record with no fixed version above the installed version has `no_fixed_version`, and the others share the group's target or reason.
+- `upgrades` on `vulns[]` (v0.8.1): per value of the record's `installed`, in version order (versions that cannot be parsed last, in string order), `{installed, target, reason}`. `target` is the version to upgrade to by the rule of the fix plan (`sca.rules.upgrade_target`, `allow_major` none, over all records of the same package and class in the same version that contain this installed version; the versions the development versions run are the evidence, and only when development fixes every one of those records). It is the package-wide fact: the target of a plan or pull request can differ from it (filters, accepted records, `allow-major`, several development versions); `reason` is `null` exactly when `target` is set, else `needs_major` (major: the first component, the first two for `0.x`, none for a calendar version whose first component has four digits or more), `no_fixed_version`, `version_unparsable` or, for an `os` record with a fixed version, `image_rebuild`. Within one version, package and installed version: with development evidence every record gets the group's target (or reason); without it a record with no fixed version above the installed version has `no_fixed_version`, and the others share the group's target or reason.
 - `dev_state` on `vulns[]` (v0.8.1): what the development versions say about the record: `fixed`, `removed`, `open` or `incomplete` (development was not scanned completely in every kind of target the record was found in), the same state `sca.plan.classify` gives; `null` on the records of a development version and when the run has no development version. Several development versions count as their union.
 
 ### Fields added in v0.8.0

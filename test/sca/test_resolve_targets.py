@@ -136,12 +136,10 @@ def run_resolve_targets(
         images=images,
         **({"scan_tag": scan_tag} if scan_tag else {}),
     )
-    github = rt.GitHubClient(runner)
+    github = rt.GitHubClient(runner, notes if notes is not None else [])
     doc = rt.resolve_targets(
         inputs, github, rt.RegistryClient(runner, "ghcr.io", token), CTX
     )
-    if notes is not None:
-        notes += github.notes
     return doc
 
 
@@ -718,6 +716,30 @@ def test_main_reports_fatal_error_and_exits_non_zero(
     assert not (tmp_path / "targets.json").exists()
 
 
+def test_main_keeps_the_annotations_the_client_recorded_before_a_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(rt, "MAX_RELEASE_PAGES", 1)
+    t = FakeRunner()
+    github_routes(t, many_stables(100))
+
+    def fail_after_listing(inputs, github, registry, context):
+        github.releases(REPOSITORY)
+        raise rt.ResolveError("then it failed")
+
+    monkeypatch.setattr(rt, "make_runner", lambda token: t)
+    monkeypatch.setattr(rt, "resolve_targets", fail_after_listing)
+    for name, value in ENV.items():
+        monkeypatch.setenv(name, value)
+    code = rt.main(["--repository", REPOSITORY, "--output-dir", str(tmp_path)])
+    assert code == 1
+    notes = json.loads((tmp_path / "annotations.json").read_text(encoding="utf-8"))
+    assert [(n["level"], n["title"]) for n in notes] == [
+        ("warning", "Release list truncated"),
+        ("error", "Scan target resolution failed"),
+    ]
+
+
 def test_main_without_the_run_context_exits_2(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -825,7 +847,7 @@ def test_release_set_lines_beyond_the_cap_are_dropped() -> None:
             repository=REPOSITORY,
                 release_lines=3,
         ),
-        rt.GitHubClient(t),
+        rt.GitHubClient(t, []),
         rt.RegistryClient(t, "ghcr.io"),
         CTX,
     )
@@ -1413,7 +1435,7 @@ def test_image_scan_disabled_marks_only_image_osv_twins() -> None:
         image_scan=False,
     )
     twins = osv_twins(
-        rt.resolve_targets(inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), CTX)
+        rt.resolve_targets(inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX)
     )
     assert twins["source-development"].get("image_scan_disabled") is None
     assert twins["source-1.1.14"].get("image_scan_disabled") is None
@@ -1432,7 +1454,7 @@ def test_image_scan_enabled_leaves_no_flag_on_any_twin(image_scan: bool | None) 
         **({"image_scan": image_scan} if image_scan is not None else {}),
     )
     targets_doc = rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), CTX
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
     assert not any("image_scan_disabled" in t for t in targets_doc["targets"])
 
@@ -1447,7 +1469,7 @@ def test_image_scan_disabled_does_not_change_the_target_statuses() -> None:
         image_scan=False,
     )
     targets_doc = rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), CTX
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
     assert {t["status"] for t in targets_doc["targets"]} == {"pending"}
 
@@ -1481,7 +1503,7 @@ def test_release_lines_input_drives_the_set(tmp_path: Path) -> None:
         repository=REPOSITORY, release_lines=1
     )
     targets_doc = rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), CTX
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
     assert list(by_id(targets_doc)) == ["source-development", "source-0.22.0"]
 
@@ -1598,7 +1620,7 @@ def test_whitespace_scan_tag_behaves_as_a_regular_run(tmp_path: Path, raw: str) 
     inputs = rt.Inputs.from_args(parse(tmp_path, "--scan-tag", raw), None)
     assert inputs.scan_tag is None
     targets_doc = rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), CTX
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
     assert list(by_id(targets_doc)) == ["source-development", "source-1.1.14"]
     assert "scan_ref" not in targets_doc
@@ -1674,7 +1696,7 @@ def resolve_with(
         **({} if force_image_scan is None else {"force_image_scan": force_image_scan}),
     )
     return rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), CTX
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
 
 

@@ -7,7 +7,7 @@ spelled.
 
 from __future__ import annotations
 
-# these three are spelled in sca_rules (the target rule returns them)
+# these three are spelled in sca.rules (the target rule returns them)
 from sca.rules.target import (  # noqa: F401
     NEEDS_MAJOR,
     NO_FIXED_VERSION,

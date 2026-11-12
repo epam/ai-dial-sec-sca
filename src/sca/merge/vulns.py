@@ -328,7 +328,7 @@ def dev_states(
     development: Development | None,
 ) -> dict[int, str | None]:
     """The development state (``fixed``, ``removed``, ``open``, ``incomplete``) of each
-    record of ``version`` (by ``id()``), by the rule of ``sca_rules.Development``;
+    record of ``version`` (by ``id()``), by the rule of ``sca.rules.Development``;
     None for the records of a development version and when the run has none.
     """
     return {
@@ -384,7 +384,7 @@ def set_rule_fields(
 ) -> None:
     """``upgrades`` and ``dev_state`` of every record. ``upgrades``: per installed
     version of the record ``target``, the version to upgrade to by the rule of the fix
-    plan (``sca_rules.upgrade_target`` over the records of the same package and class
+    plan (``sca.rules.upgrade_target`` over the records of the same package and class
     in the same version that contain the installed version), and ``reason`` (null
     exactly when there is a target): ``needs_major``, ``no_fixed_version``,
     ``version_unparsable``, or ``image_rebuild`` (an ``os`` record with a fixed

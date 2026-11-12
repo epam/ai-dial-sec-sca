@@ -10,7 +10,7 @@ RUN_ENV = {
     "SCA_RUN_EVENT": "workflow_dispatch",
     "SCA_RUN_ACTOR": "octocat",
 }
-OPTIONAL = ("SCA_RUN_ATTEMPT", "SCA_RUN_DEFAULT_BRANCH", "SCA_RUN_ENGINE_REF")
+OPTIONAL = ("SCA_RUN_ATTEMPT", "SCA_RUN_ENGINE_REF")
 
 
 @pytest.fixture

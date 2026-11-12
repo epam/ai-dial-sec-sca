@@ -70,7 +70,6 @@ runs:
         SCAN_TAG: ${{ inputs.scan-tag }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
         GH_TOKEN: ${{ inputs.github-token }}
-        ACTION_PATH: ${{ github.action_path }}
         # the run context of the engine commands (SCA_RUN_*): the GitHub values
         SCA_RUN_HOST: ${{ steps.context.outputs.host }}
         SCA_RUN_REPO: ${{ github.repository }}
@@ -79,12 +78,13 @@ runs:
         SCA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         SCA_RUN_EVENT: ${{ github.event_name }}
         SCA_RUN_ACTOR: ${{ github.triggering_actor }}
-        SCA_RUN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
-        # the shared code of the SCA actions: actions/_sca_lib, a sibling of this directory
+        # the engine package sca, from the src layout of the action checkout
         PYTHONPATH: ${{ github.action_path }}/../../src
       run: |
-        python -m sca targets \
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -f "$OUTPUT_DIR/outputs.json" "$OUTPUT_DIR/annotations.json" "$OUTPUT_DIR/summary.md"
+        python -P -m sca targets \
           --repository "$REPOSITORY" \
           --registry "$REGISTRY" \
           --images "$IMAGES" \

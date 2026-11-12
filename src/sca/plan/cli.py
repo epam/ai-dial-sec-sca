@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from sca.lib import read_json
 from sca.lib.context import CommandError
 from sca.lib.outputs import Annotations, execute
 
@@ -22,11 +23,6 @@ from .config import ConfigError, parse_config
 from .plan import build_plan
 from .render import render_markdown
 from .reports import ReportError, merge_reports
-
-
-def read_json(path: Path) -> Any:
-    with path.open(encoding="utf-8") as f:
-        return json.load(f)
 
 
 def write_text(path: Path, text: str) -> None:

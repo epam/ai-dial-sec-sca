@@ -17,7 +17,7 @@ import os
 import sys
 import urllib.parse
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -110,23 +110,37 @@ def append_text(path: str, text: str) -> None:
         f.write(text)
 
 
-def render(output_dir: Path, environ: Mapping[str, str]) -> None:
-    """Write the outputs and the summary to the files of the step, print the
-    annotations; whatever the command did not write is skipped.
+def read_part(path: Path, read: Callable[[Path], Any]) -> Any:
+    """What ``read`` makes of the file; None, with a line on stderr, if the file is
+    missing or not what the command writes (the other files are still rendered).
     """
     try:
-        outputs = read_json(output_dir / "outputs.json")["outputs"]
-        annotations = read_json(output_dir / "annotations.json")
-    except FileNotFoundError:
-        outputs, annotations = {}, []
-    if target := environ.get("GITHUB_OUTPUT"):
+        return read(path)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"{path.name} not rendered: {error!r}", file=sys.stderr)
+        return None
+
+
+def render(output_dir: Path, environ: Mapping[str, str]) -> None:
+    """Write the outputs and the summary to the files of the step, print the
+    annotations; a file the command did not write or wrote wrongly is skipped.
+    """
+    outputs = read_part(
+        output_dir / "outputs.json", lambda p: dict(read_json(p)["outputs"])
+    )
+    annotations = read_part(
+        output_dir / "annotations.json",
+        lambda p: [command_line(a) for a in read_json(p)],
+    )
+    summary = read_part(
+        output_dir / "summary.md", lambda p: p.read_text(encoding="utf-8")
+    )
+    if (target := environ.get("GITHUB_OUTPUT")) and outputs is not None:
         append_text(target, "".join(output_text(k, v) for k, v in outputs.items()))
-    summary = output_dir / "summary.md"
-    if (target := environ.get("GITHUB_STEP_SUMMARY")) and summary.is_file():
-        text = summary.read_text(encoding="utf-8")
-        append_text(target, truncate_summary(text, environ.get("SCA_RUN_URL")))
-    for annotation in annotations:
-        print(command_line(annotation))
+    if (target := environ.get("GITHUB_STEP_SUMMARY")) and summary is not None:
+        append_text(target, truncate_summary(summary, environ.get("SCA_RUN_URL")))
+    for line in annotations or []:
+        print(line)
 
 
 if __name__ == "__main__":

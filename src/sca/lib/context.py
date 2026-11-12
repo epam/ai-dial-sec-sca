@@ -32,7 +32,6 @@ class RunContext:
     url: str
     event: str
     actor: str
-    default_branch: str | None
     engine_ref: str | None
 
 
@@ -60,6 +59,5 @@ def read_run_context(environ: Mapping[str, str] | None = None) -> RunContext:
     return RunContext(
         **{field: env[name] for field, name in REQUIRED.items()},
         attempt=int(attempt),
-        default_branch=env.get("SCA_RUN_DEFAULT_BRANCH") or None,
         engine_ref=env.get("SCA_RUN_ENGINE_REF") or None,
     )

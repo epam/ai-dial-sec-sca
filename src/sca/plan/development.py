@@ -1,6 +1,6 @@
 """What development says about a release record: fixed, removed, open or unknown.
 
-The rule lives in ``sca_rules`` (``Development``); this module applies it to the
+The rule lives in ``sca.rules`` (``Development``); this module applies it to the
 planner's ``Version`` and exposes ``classify``. The planner and the report model share
 it through ``classify``.
 """
@@ -20,7 +20,7 @@ Record = Mapping[str, Any]
 
 
 def development_of(version: Version) -> Development:
-    """The development data of a ``Version`` (the rule itself is in ``sca_rules``)."""
+    """The development data of a ``Version`` (the rule itself is in ``sca.rules``)."""
     return Development.of(
         version.targets, version.twins, version.packages, version.vulns
     )

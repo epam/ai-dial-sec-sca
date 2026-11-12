@@ -30,15 +30,17 @@ runs:
     - name: Plan the fixes
       shell: bash
       env:
-        ACTION_PATH: ${{ github.action_path }}
         REPORTS: ${{ inputs.reports }}
         CONFIG: ${{ inputs.config }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
         SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
+        # the engine package sca, from the src layout of the action checkout
         PYTHONPATH: ${{ github.action_path }}/../../src
       run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -f "$OUTPUT_DIR/outputs.json" "$OUTPUT_DIR/annotations.json" "$OUTPUT_DIR/summary.md"
         mapfile -t reports < <(printf '%s\n' "$REPORTS" | sed '/^[[:space:]]*$/d')
-        python -m sca plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
+        python -P -m sca plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
     # shows what the command wrote into its output directory: step outputs, job summary, annotations
     - name: Report the results
       id: report

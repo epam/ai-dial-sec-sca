@@ -3,6 +3,7 @@ a command (``sca.lib.outputs``).
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -125,8 +126,56 @@ def test_render_of_an_empty_dir_does_nothing(
 ) -> None:
     step_output = tmp_path / "output"
     render(tmp_path, {"GITHUB_OUTPUT": str(step_output)})
-    assert step_output.read_text(encoding="utf-8") == ""
-    assert capsys.readouterr().out == ""
+    assert not step_output.exists()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("not rendered") == 3
+
+
+@pytest.mark.parametrize(
+    ("broken", "text"),
+    [
+        ("outputs.json", "{"),
+        ("outputs.json", "[]"),
+        ("outputs.json", '{"outputs": 1}'),
+        ("annotations.json", "{"),
+        ("annotations.json", '[{"level": "error"}]'),
+        ("annotations.json", "[1]"),
+        ("summary.md", None),
+    ],
+)
+def test_render_skips_only_the_file_that_is_broken(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], broken: str, text: str | None
+) -> None:
+    out = tmp_path / "out"
+    write_dir(
+        out,
+        outputs={"outputs": {"k": "v"}},
+        annotations=[{"level": "notice", "message": "m"}],
+    )
+    (out / "summary.md").write_text("# SCA\n", encoding="utf-8")
+    if text is None:
+        (out / broken).unlink()
+    else:
+        (out / broken).write_text(text, encoding="utf-8")
+    step_output, step_summary = tmp_path / "output", tmp_path / "summary"
+    render(
+        out,
+        {"GITHUB_OUTPUT": str(step_output), "GITHUB_STEP_SUMMARY": str(step_summary)},
+    )
+    good = {
+        "outputs.json": (step_output, "k=v\n"),
+        "summary.md": (step_summary, "# SCA\n"),
+    }
+    for name, (target, expected) in good.items():
+        if name == broken:
+            assert not target.exists()
+        else:
+            assert target.read_text(encoding="utf-8") == expected
+    captured = capsys.readouterr()
+    assert (captured.out == "") == (broken == "annotations.json")
+    assert captured.err.count("not rendered") == 1
+    assert captured.err.startswith(broken)
 
 
 def test_render_cuts_the_summary_with_a_link_to_the_run(tmp_path: Path) -> None:
@@ -237,11 +286,11 @@ def test_the_run_context_reads_the_variables_and_defaults() -> None:
         "42",
         1,
     )
-    assert (context.default_branch, context.engine_ref) == (None, None)
+    assert context.engine_ref is None
     full = read_run_context(
-        {**RUN_ENV, "SCA_RUN_ATTEMPT": "3", "SCA_RUN_DEFAULT_BRANCH": "main", "SCA_RUN_ENGINE_REF": "v1"}
+        {**RUN_ENV, "SCA_RUN_ATTEMPT": "3", "SCA_RUN_ENGINE_REF": "v1"}
     )
-    assert (full.attempt, full.default_branch, full.engine_ref) == (3, "main", "v1")
+    assert (full.attempt, full.engine_ref) == (3, "v1")
 
 
 def test_the_run_context_names_every_missing_variable() -> None:
@@ -278,3 +327,16 @@ def test_context_outputs_take_the_input_before_the_path() -> None:
     assert context_outputs(env) == {"host": "git.example:8443", "engine-ref": "v0.8.1"}
     assert context_outputs({**env, "ENGINE_REF_INPUT": "abc123"})["engine-ref"] == "abc123"
     assert context_outputs({})["engine-ref"] == ""
+
+
+def test_every_python_module_run_of_an_action_leaves_the_workspace_off_the_path() -> None:
+    """``-P``: a ``sca`` package in the checked-out workspace must not shadow the engine."""
+    runs = [
+        (path.parent.name, line.strip())
+        for path in Path(__file__).resolve().parents[2].glob("actions/*/action.yml")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if re.search(r"\bpython3?\s+(\S+\s+)*-m\b", line)
+        and not line.lstrip().startswith("#")
+    ]
+    assert runs
+    assert [r for r in runs if not re.search(r"\bpython3?\s+-P\s+-m\b", r[1])] == []

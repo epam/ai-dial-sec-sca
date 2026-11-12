@@ -104,9 +104,9 @@ def make_runner(
 class GitHubClient:
     """The GitHub REST API through ``gh api``."""
 
-    def __init__(self, run: Runner) -> None:
+    def __init__(self, run: Runner, notes: Annotations) -> None:
         self._run = run
-        self.notes: Annotations = []  # what the calls found worth telling
+        self.notes = notes  # what the calls found worth telling, kept on failure too
 
     def _get(self, path: str, missing_ok: bool = False) -> Any:
         """The JSON response of GET ``path``; None for HTTP 404 if ``missing_ok``."""
@@ -660,7 +660,7 @@ def run(
     context = read_run_context(environ)
     inputs = Inputs.from_args(args, environ.get("GH_TOKEN") or None)
     run_tool = runner or make_runner(inputs.token)
-    github = GitHubClient(run_tool)
+    github = GitHubClient(run_tool, notes)
     try:
         targets_doc = resolve_targets(
             inputs,
@@ -680,7 +680,7 @@ def run(
         f"({targets_doc['commit_sha']})"
     )
     print(render_table(targets_doc["targets"]))
-    notes += [*github.notes, *annotations(targets_doc["targets"])]
+    notes += annotations(targets_doc["targets"])
     return "ok", {
         "matrix": build_matrix(targets_doc),
         "targets-file": str(targets_file),
