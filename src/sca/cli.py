@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import signal
 import sys
 from collections.abc import Sequence
 from importlib import import_module
@@ -24,6 +25,12 @@ def usage() -> str:
     return f"usage: sca <command> [arguments]\n\ncommands:\n{rows}\n"
 
 
+def terminate(signum: int, _frame: object) -> None:
+    """SIGTERM (a cancelled job) ends the command like an exit, so ``finally`` blocks
+    (the cleanup of its temporary directories) run."""
+    raise SystemExit(128 + signum)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help"):
@@ -32,6 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args[0] not in COMMANDS:
         print(f"sca: unknown command {args[0]!r}\n\n{usage()}", end="", file=sys.stderr)
         return 2
+    signal.signal(signal.SIGTERM, terminate)
     return import_module(COMMANDS[args[0]][0]).main(args[1:], prog=f"sca {args[0]}")
 
 

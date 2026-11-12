@@ -9,15 +9,24 @@ or a version (a local workspace package, which OSV cannot be asked about either)
 removed; ``osv-scanner scan source -L <id>.cdx.json --all-packages`` matches the rest
 with OSV (online, api.osv.dev).
 
-An image target also gets the direct ``osv-scanner scan image <ref> --all-packages``:
-it reads the image's own package database (os-release, apk ``o:`` / dpkg ``Source:``)
+An image target also gets the direct image scan: ``crane pull --platform linux/amd64
+<ref>`` writes the image to a tar archive and ``osv-scanner scan image --archive
+<tar> --all-packages`` scans it, with no Docker daemon. It reads the image's own package database (os-release, apk ``o:`` / dpkg ``Source:``)
 and so can query OSV about the OS packages correctly. The BOM query runs either way,
 so a package either detector sees keeps its OSV check; the two outputs are both
 ``{"results": [...]}`` and their ``results`` are concatenated into one ``osv/<id>.json``.
 The image scan is skipped when the target carries ``image_scan_disabled`` (an image too
 large for the runner disk): the target stays ``ok`` with a reason, so the exclusion is
-stated, not silent. After each image scan ``docker image rm`` removes the pulled image
-(their store must not fill the runner disk).
+stated, not silent. The tar lives in a temporary directory of its own, one image at a
+time, and is deleted after the scan, whatever its result (the runner disk).
+
+Registry credentials come only from ``SCA_REGISTRY_USER`` and ``SCA_REGISTRY_PASSWORD``
+and only for an image of ``--registry`` (a host, as in ``sca scan``). ``crane`` gets them
+through a ``config.json`` (mode 0600) in a temporary ``DOCKER_CONFIG`` directory, deleted
+right after the pull; never as arguments. Any other image is pulled anonymously with a
+``config.json`` without credentials; nothing of the machine's Docker or Podman auth
+configuration is used, and no command gets ``SCA_REGISTRY_*``. A half-set or comma pair is
+refused before the first target. Work directories are made with ``tempfile`` (``TMPDIR``).
 
 Reads targets.json and ``trivy/<id>.status.json`` of the parts directory. Writes, per
 OSV target, ``osv/<id>.status.json`` (``{status, reason, queried_at,
@@ -31,7 +40,7 @@ scanned is ``not_applicable``. The merge fails an output that is not a valid res
 The script exits 0: the workflow decides about failing the run. It writes
 ``outputs.json`` (no output values) and ``annotations.json`` into the output directory.
 
-With ``--offline-db-dir DIR`` osv-scanner makes no OSV or deps.dev network request (the image pull of an image scan still happens): ``DIR`` is the osv-scanner
+With ``--offline-db-dir DIR`` osv-scanner makes no OSV or deps.dev network request (the crane pull of an image scan still happens): ``DIR`` is the osv-scanner
 database cache (``OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY``), filled by the caller beforehand
 (``osv-scanner --download-offline-databases``; the engine never downloads). Both scans
 run with ``--offline``, which switches off every network feature of osv-scanner, not only
@@ -52,13 +61,14 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from sca.lib import dump_json, format_time, read_json
 from sca.lib.outputs import Annotations, execute
+from sca.lib.registry import check_credentials, check_registry, clean_env, login, write_docker_config
 
 # Components Trivy covers with its distribution feeds
 OS_PURL_TYPES = frozenset({"deb", "apk", "rpm"})
@@ -69,8 +79,9 @@ OFFLINE_MISSING = "no offline version of the OSV database"
 CACHE_ENV = "OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY"
 REASON_LIMIT = 400
 # A command that hangs must not take the rest of the run with it (the job has one
-# bound for all targets): the pull of an image takes the longest.
+# bound for all targets): the pull and the scan of an image take the longest.
 COMMAND_TIMEOUT_SECONDS = 600.0
+PULL_TIMEOUT_SECONDS = 600.0
 IMAGE_SCAN_TIMEOUT_SECONDS = 1200.0
 # An image target whose direct image scan is switched off for the repository
 IMAGE_SCAN_DISABLED_REASON = (
@@ -78,18 +89,23 @@ IMAGE_SCAN_DISABLED_REASON = (
     "disk): OS packages of the image are not checked by OSV"
 )
 
-Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
+Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
-def run_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+def run_command(
+    command: Sequence[str], env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run a command; a program that cannot start is exit code 127 (as in a shell),
     one that outlives its timeout is exit code 124 (as in ``timeout``), so a hung
-    target fails with a reason and the next target still runs."""
-    timeout = (
-        IMAGE_SCAN_TIMEOUT_SECONDS
-        if list(command[1:3]) == ["scan", "image"]
-        else COMMAND_TIMEOUT_SECONDS
-    )
+    target fails with a reason and the next target still runs. The command gets the
+    process environment without registry credentials and Docker or Podman auth
+    configuration, plus ``env``."""
+    if command[0] == "crane":
+        timeout = PULL_TIMEOUT_SECONDS
+    elif list(command[1:3]) == ["scan", "image"]:
+        timeout = IMAGE_SCAN_TIMEOUT_SECONDS
+    else:
+        timeout = COMMAND_TIMEOUT_SECONDS
     try:
         return subprocess.run(
             command,
@@ -97,6 +113,7 @@ def run_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env={**clean_env(), **(env or {})},
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -157,13 +174,15 @@ def scan_target(
     run: Runner,
     ref: str | None = None,
     offline: bool = False,
+    credentials: tuple[str, str] | None = None,
 ) -> tuple[str, str | None]:
     """Convert, filter and scan one target: ``(status, reason)``; the osv-scanner
     output is written to ``output``.
 
     An image target (``ref`` given) also scans the image itself, which queries OSV
     about its OS packages; its ``results`` are appended to the BOM output's. ``offline``
-    queries local databases only (see the module docstring).
+    queries local databases only (see the module docstring); ``credentials`` are for the
+    pull of the image.
     """
     convert = ["trivy", "convert", "--format", "cyclonedx", "--output", str(bom_path)]
     converted = run([*convert, str(native)])
@@ -188,30 +207,55 @@ def scan_target(
         dump_json(output, {"results": []})
     if ref is None:
         return "ok", None
+    # a separate file: the image scan must not overwrite the BOM output
+    return scan_image(ref, output, bom_path.with_suffix(".image.json"), run, offline, credentials)
+
+
+def pull_image(
+    ref: str, tar: Path, run: Runner, credentials: tuple[str, str] | None
+) -> subprocess.CompletedProcess[str]:
+    """``crane pull`` of the linux/amd64 image into ``tar``. The credentials, if any, are
+    the one ``auths`` entry of a ``DOCKER_CONFIG`` that exists only for the pull;
+    without any, the config is empty (anonymous)."""
+    config_dir = tar.parent / "docker"
+    config = config_dir / "config.json"
     try:
-        # a separate file: the image scan must not overwrite the BOM output
-        return scan_image(
-            ref, output, bom_path.with_suffix(".image.json"), run, offline
+        write_docker_config(config_dir, ref.split("/", 1)[0], credentials)
+        return run(
+            ["crane", "pull", "--platform", "linux/amd64", ref, str(tar)],
+            {"DOCKER_CONFIG": str(config_dir)},
         )
     finally:
-        # cleanup, not a result: docker keeps every pulled image in its store
-        run(["docker", "image", "rm", ref])
+        config.unlink(missing_ok=True)
 
 
 def scan_image(
-    ref: str, output: Path, image_path: Path, run: Runner, offline: bool = False
+    ref: str,
+    output: Path,
+    image_path: Path,
+    run: Runner,
+    offline: bool = False,
+    credentials: tuple[str, str] | None = None,
 ) -> tuple[str, str | None]:
-    """``osv-scanner scan image`` of one image reference: its ``results`` are
+    """``osv-scanner scan image --archive`` of one image reference, pulled with crane
+    into a temporary tar that is deleted afterwards: its ``results`` are
     concatenated onto the BOM query's ``results`` in ``output`` (the other top-level
     keys of the scan image output are dropped; the merge reads only ``results``).
-    A failed scan is a failed target even though the BOM query succeeded: a target
-    not scanned to the end never looks clean.
+    A failed pull or scan is a failed target even though the BOM query succeeded: a
+    target not scanned to the end never looks clean.
     """
-    scan = ["scan", "image", ref, "--all-packages", "--format", "json"]
-    scan += ["--output-file", str(image_path)]
-    if offline:
-        scan.append("--offline")
-    scanned = run(["osv-scanner", *scan])
+    with tempfile.TemporaryDirectory() as work:
+        tar = Path(work) / "image.tar"
+        pulled = pull_image(ref, tar, run, credentials)
+        if pulled.returncode:
+            code = pulled.returncode
+            return "failed", f"crane pull failed (exit {code}): {tail(pulled.stderr)}"
+        scan = ["scan", "image", "--archive", str(tar), "--all-packages", "--format", "json"]
+        scan += ["--output-file", str(image_path)]
+        if offline:
+            scan.append("--offline")
+        # the extraction of the archive goes into the directory that is removed here
+        scanned = run(["osv-scanner", *scan], {"TMPDIR": work})
     if scan_failed(scanned, offline):
         code = scanned.returncode
         return (
@@ -237,6 +281,9 @@ def trivy_status(trivy_dir: Path, target_id: str) -> str:
 
 def run_all(args: argparse.Namespace, run: Runner, now: datetime) -> None:
     offline = args.offline_db_dir is not None
+    check_registry(args.registry)
+    if args.registry:
+        check_credentials()
     if offline:
         os.environ[CACHE_ENV] = str(args.offline_db_dir)
     # "osv-scanner version: 2.6.0"
@@ -279,6 +326,7 @@ def run_all(args: argparse.Namespace, run: Runner, now: datetime) -> None:
                     run,
                     ref,
                     offline,
+                    login(ref, args.registry),
                 )
             dump_json(
                 out_dir / f"{tid}.status.json",
@@ -304,6 +352,7 @@ def parse_args(
         type=Path,
         help="osv-scanner offline database cache; given: no query leaves the runner",
     )
+    parser.add_argument("--registry", help="the registry host the credentials are for")
     return parser.parse_args(argv)
 
 

@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import traceback
 from collections.abc import Sequence
@@ -34,10 +33,10 @@ from typing import Any
 from sca.lib import dump_json, read_json
 from sca.lib.context import CommandError, UsageError
 from sca.lib.outputs import Annotations, execute
+from sca.lib.registry import login
 
 from . import SCAN_ENV, isolated, trivy
 
-USER_ENV, PASSWORD_ENV = "SCA_REGISTRY_USER", "SCA_REGISTRY_PASSWORD"
 TITLE = "Trivy target failed"
 
 
@@ -69,22 +68,10 @@ def find_target(args: argparse.Namespace) -> dict[str, Any]:
     raise UsageError(f"{args.targets_file} has no Trivy target {args.target_id!r}")
 
 
-def is_host(value: str) -> bool:
-    return "/" not in value and ("." in value or ":" in value or value == "localhost")
-
-
 def credentials(ref: str | None, registry: str | None) -> dict[str, str]:
     """``TRIVY_USERNAME`` and ``TRIVY_PASSWORD`` for an image of ``registry``, else none."""
-    if registry is not None and not is_host(registry):
-        raise UsageError(f"--registry must be a host (a dot, a port or localhost), got {registry!r}")
-    user, password = os.environ.get(USER_ENV), os.environ.get(PASSWORD_ENV)
-    if not (ref and registry and ref.split("/", 1)[0] == registry and (user or password)):
-        return {}
-    if not (user and password):
-        raise UsageError(f"{USER_ENV} and {PASSWORD_ENV} are set together or not at all")
-    if "," in user or "," in password:
-        raise UsageError(f"{USER_ENV} and {PASSWORD_ENV} must not contain a comma: Trivy splits them on it")
-    return {"TRIVY_USERNAME": user, "TRIVY_PASSWORD": password}
+    given = login(ref, registry)
+    return {"TRIVY_USERNAME": given[0], "TRIVY_PASSWORD": given[1]} if given else {}
 
 
 def scan(args: argparse.Namespace, parts: Path, status: dict[str, Any]) -> str | None:

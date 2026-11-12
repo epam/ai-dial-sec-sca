@@ -6,12 +6,13 @@ target against them.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+
+from sca.lib.registry import clean_env, write_docker_config
 
 # Database repositories, comma separated, tried in order (Trivy's own syntax)
 DB_REPOSITORY = "mirror.gcr.io/aquasec/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2"
@@ -52,11 +53,7 @@ def trivy(
     config and registry credential, plus ``env``: nothing but ``env`` configures it.
     Its output goes to the log unless ``capture``.
     """
-    inherited = {
-        k: v
-        for k, v in os.environ.items()
-        if not k.startswith(("TRIVY_", "SCA_REGISTRY_")) and k != "DOCKER_CONFIG"
-    }
+    inherited = {k: v for k, v in clean_env().items() if not k.startswith("TRIVY_")}
     return subprocess.run(
         ["trivy", *args],
         env=inherited | dict(env),
@@ -70,13 +67,13 @@ def trivy(
 @contextmanager
 def isolated() -> Iterator[dict[str, str]]:
     """The environment that keeps a Trivy run apart from the machine and from the
-    scanned repository: an empty Docker config directory (so only the credentials the
-    engine gives are used) and an empty Trivy config file (so no ``trivy.yaml`` of the
+    scanned repository: a Docker config directory without credentials (so only the
+    credentials the engine gives are used) and an empty Trivy config file (so no ``trivy.yaml`` of the
     working directory is read).
     """
     with tempfile.TemporaryDirectory() as work:
         docker = Path(work) / "docker"
-        docker.mkdir()
+        write_docker_config(docker)
         config = Path(work) / "trivy.yaml"
         config.write_text("{}", encoding="utf-8")
         yield {"DOCKER_CONFIG": str(docker), "TRIVY_CONFIG": str(config)}

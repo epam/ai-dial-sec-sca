@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Action inputs and outputs are unchanged.
+Action inputs and outputs are unchanged, except the new optional inputs of `sca_query_osv`.
 
 ### Added
 
@@ -13,6 +13,9 @@ Action inputs and outputs are unchanged.
 - `actions/sca_tools`: the public action around it (inputs `tools`, `trivy-version`, `trivy-sha256`, `dir`; output `dir`, the absolute `bin` directory); only `bin` is on `PATH` afterwards.
 - `sca db` and `actions/sca_db`: download the Trivy vulnerability and Java databases (repositories from the arguments, `TRIVY_DB_REPOSITORY` / `TRIVY_JAVA_DB_REPOSITORY` or the defaults of the engine) and describe the snapshot (`db-info.json`, output `db-info`), in place of the `trivy-db` job steps of `sca_scheduled.yml`. The handoff of the databases to the scan jobs stays with the caller.
 - `sca scan` and `actions/sca_scan`: scan one target with Trivy and write its parts (`trivy/<id>.json`, `.status.json`, `.txt`, `.trivyignore`, `.gradle-graph/`), in place of the scan steps of the `trivy` job of `sca_scheduled.yml`. The scan settings are owned by the engine, a failed scan (or any exception, or a bad argument value) leaves a `failed` status and exits 1 (2 for a bad value). Registry credentials are `SCA_REGISTRY_USER` and `SCA_REGISTRY_PASSWORD` (inputs `registry-user`, `registry-password`), given to Trivy through its environment for an image of `--registry` only; the `docker login` of the workflow is not needed.
+
+- `sca osv`: the direct image scan runs without a Docker daemon: `crane pull --platform linux/amd64` writes the image to a temporary tar (one image at a time, deleted after the scan, also after a failure) and `osv-scanner scan image --archive` scans it; `docker image rm` is gone. A failed pull is a failed target (`crane pull failed (exit N): ...`). The option `--registry` and `SCA_REGISTRY_USER` / `SCA_REGISTRY_PASSWORD` work as in `sca scan` (the host rule is shared, `sca.lib.registry`); crane gets them through a `config.json` (mode 0600) in a temporary `DOCKER_CONFIG` for an image of that host only, any other image is pulled anonymously with a `config.json` without credentials (the file always exists, so no Podman auth file of the machine is read; `docker.io` uses the key `https://index.docker.io/v1/`). No command of `sca osv` or `sca scan` gets `SCA_REGISTRY_*`, `DOCKER_CONFIG` or `REGISTRY_AUTH_FILE` from the machine; a half-set or comma credential pair is refused before the first target. osv-scanner extracts the archive into the temporary directory of the image (`TMPDIR`), the actions set `TMPDIR` under `runner.temp`, and `sca` turns SIGTERM into an exit so the cleanup runs. The pull has its own timeout (600 s).
+- `actions/sca_query_osv`: installs crane too; new optional inputs `registry`, `registry-user`, `registry-password` (no `docker login` needed).
 
 ### Changed
 
