@@ -111,14 +111,16 @@ runs:
         SERVER_URL: ${{ github.server_url }}
         ACTION_PATH: ${{ github.action_path }}
       run: python "$ACTION_PATH/../_github/github_adapter.py" context
-    # The credentials are in the environment of this step only; the engine hands them to crane for an image of the
-    # registry and for nothing else
+    # The credentials are in the environment of this step only; the engine passes them to no command but crane (through
+    # a temporary Docker config, for an image of the registry only). TMPDIR is under runner.temp, which the runner
+    # cleans, so a killed run leaves nothing behind
     - name: Query OSV
       shell: bash
       env:
         SCA_REGISTRY_USER: ${{ inputs.registry-user }}
         SCA_REGISTRY_PASSWORD: ${{ inputs.registry-password }}
         REGISTRY: ${{ inputs.registry }}
+        TMPDIR: ${{ runner.temp }}/sca-tmp
         SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
         # the engine package sca, from the src layout of the action checkout
         PYTHONPATH: ${{ github.action_path }}/../../src
@@ -128,6 +130,7 @@ runs:
         OFFLINE_DB_DIR: ${{ inputs.offline-db-dir }}
       run: |
         # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        mkdir -p "$TMPDIR"
         rm -f "$OUTPUT_DIR/outputs.json" "$OUTPUT_DIR/annotations.json" "$OUTPUT_DIR/summary.md"
         args=(
           --targets-file "$TARGETS_FILE"

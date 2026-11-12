@@ -113,8 +113,11 @@ runs:
         TRIVY_DB_REPOSITORY: ${{ inputs.trivy-db-repository }}
         TRIVY_JAVA_DB_REPOSITORY: ${{ inputs.trivy-java-db-repository }}
         OUTPUT_DIR: ${{ runner.temp }}/sca-db-out
+        # under runner.temp, which the runner cleans: a killed run leaves nothing behind
+        TMPDIR: ${{ runner.temp }}/sca-tmp
       run: |
         # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        mkdir -p "$TMPDIR"
         rm -rf "$OUTPUT_DIR"
         python -P -m sca db --cache-dir "$CACHE_DIR" --output-dir "$OUTPUT_DIR"
     # shows what the command wrote into its output directory: step outputs, job summary, annotations

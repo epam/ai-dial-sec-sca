@@ -42,7 +42,7 @@ class FakeTrivy:
                 "env": env,
                 "cwd": cwd,
                 "config": json.loads(Path(config).read_text("utf-8")) if config else None,
-                "docker": sorted(p.name for p in Path(docker).iterdir()) if docker else None,
+                "docker": json.loads((Path(docker) / "config.json").read_text("utf-8")) if docker else None,
             }
         )
         verb = argv[1]
@@ -121,6 +121,7 @@ def test_db_runs_apart_from_the_machine(fake, tmp_path, monkeypatch):
         ("TRIVY_SEVERITY", "LOW"),
         ("SCA_REGISTRY_PASSWORD", SECRET),
         ("DOCKER_CONFIG", str(tmp_path)),
+        ("REGISTRY_AUTH_FILE", str(tmp_path)),
     ):
         monkeypatch.setenv(name, value)
     assert db(tmp_path) == 0
@@ -132,7 +133,9 @@ def test_db_runs_apart_from_the_machine(fake, tmp_path, monkeypatch):
             "TRIVY_JAVA_DB_REPOSITORY",
         ]
         assert SECRET not in call["env"].values() and call["env"]["DOCKER_CONFIG"] != str(tmp_path)
-        assert (call["config"], call["docker"]) == ({}, [])
+        assert "REGISTRY_AUTH_FILE" not in call["env"]
+        # an anonymous config file that exists: no Podman auth fallback
+        assert (call["config"], call["docker"]) == ({}, {"auths": {}})
 
 
 def test_db_info_is_what_merge_reads(fake, tmp_path, run_env):
@@ -210,7 +213,7 @@ def test_scan_runs_with_the_settings_of_the_engine_and_nothing_inherited(fake, s
         env = call["env"]
         assert env["TRIVY_SEVERITY"] == "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
         assert not {"TRIVY_SKIP_DIRS", "TRIVY_REGISTRY_TOKEN"} & set(env)
-        assert env["DOCKER_CONFIG"] != str(scan.tmp) and call["docker"] == []
+        assert env["DOCKER_CONFIG"] != str(scan.tmp) and call["docker"] == {"auths": {}}
     env = fake.calls[0]["env"]
     assert (env["TRIVY_IGNOREFILE"], env["TRIVY_EXIT_CODE"], env["TRIVY_SKIP_DB_UPDATE"]) == ("/dev/null", "0", "true")
     assert env["TRIVY_CACHE_DIR"] == str((scan.tmp / "cache").resolve())

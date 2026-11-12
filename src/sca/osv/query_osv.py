@@ -23,8 +23,10 @@ time, and is deleted after the scan, whatever its result (the runner disk).
 Registry credentials come only from ``SCA_REGISTRY_USER`` and ``SCA_REGISTRY_PASSWORD``
 and only for an image of ``--registry`` (a host, as in ``sca scan``). ``crane`` gets them
 through a ``config.json`` (mode 0600) in a temporary ``DOCKER_CONFIG`` directory, deleted
-right after the pull; never as arguments. Any other image is pulled anonymously with an
-empty ``DOCKER_CONFIG``; nothing of the machine's Docker config is used.
+right after the pull; never as arguments. Any other image is pulled anonymously with a
+``config.json`` without credentials; nothing of the machine's Docker or Podman auth
+configuration is used, and no command gets ``SCA_REGISTRY_*``. A half-set or comma pair is
+refused before the first target. Work directories are made with ``tempfile`` (``TMPDIR``).
 
 Reads targets.json and ``trivy/<id>.status.json`` of the parts directory. Writes, per
 OSV target, ``osv/<id>.status.json`` (``{status, reason, queried_at,
@@ -54,8 +56,6 @@ reason that states the exclusion (instead of the default one) when the image sca
 from __future__ import annotations
 
 import argparse
-import base64
-import json
 import os
 import re
 import subprocess
@@ -68,7 +68,7 @@ from typing import Any
 
 from sca.lib import dump_json, format_time, read_json
 from sca.lib.outputs import Annotations, execute
-from sca.lib.registry import check_registry, login
+from sca.lib.registry import check_credentials, check_registry, clean_env, login, write_docker_config
 
 # Components Trivy covers with its distribution feeds
 OS_PURL_TYPES = frozenset({"deb", "apk", "rpm"})
@@ -81,6 +81,7 @@ REASON_LIMIT = 400
 # A command that hangs must not take the rest of the run with it (the job has one
 # bound for all targets): the pull and the scan of an image take the longest.
 COMMAND_TIMEOUT_SECONDS = 600.0
+PULL_TIMEOUT_SECONDS = 600.0
 IMAGE_SCAN_TIMEOUT_SECONDS = 1200.0
 # An image target whose direct image scan is switched off for the repository
 IMAGE_SCAN_DISABLED_REASON = (
@@ -96,13 +97,15 @@ def run_command(
 ) -> subprocess.CompletedProcess[str]:
     """Run a command; a program that cannot start is exit code 127 (as in a shell),
     one that outlives its timeout is exit code 124 (as in ``timeout``), so a hung
-    target fails with a reason and the next target still runs. ``env`` is added to
-    the process environment."""
-    timeout = (
-        IMAGE_SCAN_TIMEOUT_SECONDS
-        if command[0] == "crane" or list(command[1:3]) == ["scan", "image"]
-        else COMMAND_TIMEOUT_SECONDS
-    )
+    target fails with a reason and the next target still runs. The command gets the
+    process environment without registry credentials and Docker or Podman auth
+    configuration, plus ``env``."""
+    if command[0] == "crane":
+        timeout = PULL_TIMEOUT_SECONDS
+    elif list(command[1:3]) == ["scan", "image"]:
+        timeout = IMAGE_SCAN_TIMEOUT_SECONDS
+    else:
+        timeout = COMMAND_TIMEOUT_SECONDS
     try:
         return subprocess.run(
             command,
@@ -110,7 +113,7 @@ def run_command(
             text=True,
             encoding="utf-8",
             errors="replace",
-            env={**os.environ, **env} if env else None,
+            env={**clean_env(), **(env or {})},
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -212,16 +215,12 @@ def pull_image(
     ref: str, tar: Path, run: Runner, credentials: tuple[str, str] | None
 ) -> subprocess.CompletedProcess[str]:
     """``crane pull`` of the linux/amd64 image into ``tar``. The credentials, if any, are
-    the one ``auths`` entry of a ``DOCKER_CONFIG`` that exists only for the pull."""
+    the one ``auths`` entry of a ``DOCKER_CONFIG`` that exists only for the pull;
+    without any, the config is empty (anonymous)."""
     config_dir = tar.parent / "docker"
-    config_dir.mkdir(mode=0o700)
     config = config_dir / "config.json"
     try:
-        if credentials:
-            auth = base64.b64encode(":".join(credentials).encode()).decode()
-            fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"auths": {ref.split("/", 1)[0]: {"auth": auth}}}, f)
+        write_docker_config(config_dir, ref.split("/", 1)[0], credentials)
         return run(
             ["crane", "pull", "--platform", "linux/amd64", ref, str(tar)],
             {"DOCKER_CONFIG": str(config_dir)},
@@ -255,7 +254,8 @@ def scan_image(
         scan += ["--output-file", str(image_path)]
         if offline:
             scan.append("--offline")
-        scanned = run(["osv-scanner", *scan])
+        # the extraction of the archive goes into the directory that is removed here
+        scanned = run(["osv-scanner", *scan], {"TMPDIR": work})
     if scan_failed(scanned, offline):
         code = scanned.returncode
         return (
@@ -282,6 +282,8 @@ def trivy_status(trivy_dir: Path, target_id: str) -> str:
 def run_all(args: argparse.Namespace, run: Runner, now: datetime) -> None:
     offline = args.offline_db_dir is not None
     check_registry(args.registry)
+    if args.registry:
+        check_credentials()
     if offline:
         os.environ[CACHE_ENV] = str(args.offline_db_dir)
     # "osv-scanner version: 2.6.0"

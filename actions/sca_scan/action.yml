@@ -153,8 +153,11 @@ runs:
         LOCKFILES: ${{ inputs.lockfiles }}
         GRAPH_DIR: ${{ inputs.graph-dir }}
         OUTPUT_DIR: ${{ runner.temp }}/sca-scan-out
+        # under runner.temp, which the runner cleans: a killed run leaves nothing behind
+        TMPDIR: ${{ runner.temp }}/sca-tmp
       run: |
         # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        mkdir -p "$TMPDIR"
         rm -rf "$OUTPUT_DIR"
         # the install broke, or was skipped because a step before it broke: no Trivy
         if [ -z "$FAILED" ] && [ "$INSTALL_OUTCOME" != success ]; then

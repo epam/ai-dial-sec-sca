@@ -6,6 +6,7 @@ import argparse
 import base64
 import json
 import os
+import signal
 import subprocess
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sca import cli
 from sca.lib.context import UsageError
 from sca.osv import query_osv as qo
 
@@ -112,6 +114,7 @@ class FakeCommands:
         # existed at each scan; the archive paths
         self.pulls: list[tuple[dict[str, str], str | None]] = []
         self.tars_scanned: list[bool] = []
+        self.scan_envs: list[dict[str, str]] = []
         self.tars: list[Path] = []
         self.scanned_boms: list[dict[str, Any]] = []
 
@@ -145,6 +148,7 @@ class FakeCommands:
         output = Path(command[command.index("--output-file") + 1])
         if command[1:3] == ["scan", "image"]:
             self.tars_scanned.append(Path(command[command.index("--archive") + 1]).exists())
+            self.scan_envs.append(dict(env or {}))
             if self.image_output is not False:
                 output.write_text(json.dumps(self.image_output), encoding="utf-8")
             return subprocess.CompletedProcess(
@@ -613,7 +617,8 @@ def test_another_registry_is_pulled_anonymously_with_an_empty_docker_config(
     commands = FakeCommands()
     image_workspace(tmp_path).run(commands, registry=registry)
     env, config = commands.pulls[0]
-    assert config is None
+    # a config file that exists and has no credentials: no fallback to Podman auth files
+    assert json.loads(config or "") == {"auths": {}}
     assert env["DOCKER_CONFIG"] != "/inherited"
 
 
@@ -632,6 +637,101 @@ def test_half_credentials_are_refused(
     monkeypatch.delenv("SCA_REGISTRY_PASSWORD", raising=False)
     with pytest.raises(UsageError):
         image_workspace(tmp_path).run(FakeCommands(), registry=GHCR)
+
+
+@pytest.mark.parametrize("host", ["docker.io", "index.docker.io"])
+def test_docker_hub_credentials_use_the_historical_auths_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str
+) -> None:
+    with_credentials(monkeypatch)
+    ws = Workspace(tmp_path, kind="image", extra={"ref": f"{host}/library/app:1"})
+    commands = FakeCommands()
+    ws.run(commands, registry=host)
+    auths = json.loads(commands.pulls[0][1] or "")["auths"]
+    assert list(auths) == ["https://index.docker.io/v1/"]
+
+
+def test_the_config_is_removed_when_the_runner_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_credentials(monkeypatch)
+    seen: list[Path] = []
+
+    def boom(command, env=None):  # type: ignore[no-untyped-def]
+        if command[0] == "crane":
+            seen.append(Path(env["DOCKER_CONFIG"]))
+            assert (seen[0] / "config.json").exists()
+            raise KeyboardInterrupt
+        return FakeCommands()(command, env)
+
+    with pytest.raises(KeyboardInterrupt):
+        image_workspace(tmp_path).run(boom, registry=GHCR)
+    assert not seen[0].exists()
+
+
+def test_the_pair_is_checked_before_any_target_is_processed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SCA_REGISTRY_USER", "robot")
+    monkeypatch.delenv("SCA_REGISTRY_PASSWORD", raising=False)
+    ws = Workspace(tmp_path)  # a source target: no image would ask for the pair
+    commands = FakeCommands()
+    with pytest.raises(UsageError):
+        ws.run(commands, registry="registry.example.com")
+    assert commands.calls == []
+    assert not ws.osv_dir.exists()
+
+
+def test_osv_scanner_gets_its_own_tmpdir_and_no_ambient_registry_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_credentials(monkeypatch)
+    commands = FakeCommands()
+    image_workspace(tmp_path).run(commands, registry=GHCR)
+    tmpdir = Path(commands.scan_envs[0]["TMPDIR"])
+    assert tmpdir == commands.tars[0].parent
+    assert not tmpdir.exists()
+
+
+def test_subprocesses_get_no_registry_credentials_or_auth_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with_credentials(monkeypatch)
+    monkeypatch.setenv("REGISTRY_AUTH_FILE", "/auth.json")
+    monkeypatch.setenv("KEEP", "yes")
+    seen: list[dict[str, str]] = []
+
+    def fake_run(command: Sequence[str], **kwargs: Any) -> Any:
+        seen.append(kwargs["env"])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(qo.subprocess, "run", fake_run)
+    qo.run_command(["osv-scanner", "scan", "source"])
+    qo.run_command(["crane", "pull"], {"DOCKER_CONFIG": "/own"})
+    scanner, crane = seen
+    for name in ("SCA_REGISTRY_USER", "SCA_REGISTRY_PASSWORD", "DOCKER_CONFIG", "REGISTRY_AUTH_FILE"):
+        assert name not in scanner
+    assert scanner["KEEP"] == "yes"
+    assert crane["DOCKER_CONFIG"] == "/own" and "REGISTRY_AUTH_FILE" not in crane
+    assert "SCA_REGISTRY_PASSWORD" not in crane
+
+
+def test_a_pull_has_its_own_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = record_timeouts(monkeypatch)
+    qo.run_command(["crane", "pull", "ref", "tar"])
+    assert seen == [qo.PULL_TIMEOUT_SECONDS] == [600.0]
+
+
+def test_sigterm_ends_the_command_like_an_exit_so_cleanup_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handlers: dict[int, Any] = {}
+    monkeypatch.setattr(cli.signal, "signal", lambda num, handler: handlers.update({num: handler}))
+    monkeypatch.setattr(cli, "import_module", lambda name: type("M", (), {"main": staticmethod(lambda a, prog: 0)}))
+    assert cli.main(["osv"]) == 0
+    with pytest.raises(SystemExit) as exit_:
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+    assert exit_.value.code == 128 + signal.SIGTERM
 
 
 # --- offline mode -------------------------------------------------------------
