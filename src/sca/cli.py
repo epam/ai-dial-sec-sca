@@ -1,5 +1,5 @@
 """The ``sca`` command: ``sca <command> [arguments]``, each command is a module with a
-``main(argv) -> int`` of its own (``sca <command> --help`` shows its arguments).
+``main(argv, prog) -> int`` of its own (``sca <command> --help`` shows its arguments).
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ COMMANDS = {
     "osv": ("sca.osv.query_osv", "query OSV for the packages Trivy found"),
     "merge": ("sca.merge.merge_results", "merge the scan parts into report.json"),
     "plan": ("sca.plan.cli", "plan the fixes from report.json files"),
+    "tools": ("sca.tools.cli", "install the tools of the scan (tools install)"),
 }
 
 
@@ -29,7 +30,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args[0] not in COMMANDS:
         print(f"sca: unknown command {args[0]!r}\n\n{usage()}", end="", file=sys.stderr)
         return 2
-    return import_module(COMMANDS[args[0]][0]).main(args[1:])
+    return import_module(COMMANDS[args[0]][0]).main(args[1:], prog=f"sca {args[0]}")
 
 
 if __name__ == "__main__":

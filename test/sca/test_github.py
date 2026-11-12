@@ -129,7 +129,7 @@ def test_render_of_an_empty_dir_does_nothing(
     assert not step_output.exists()
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.count("not rendered") == 3
+    assert captured.err == ""  # a file the command did not write is no error
 
 
 @pytest.mark.parametrize(
@@ -174,8 +174,11 @@ def test_render_skips_only_the_file_that_is_broken(
             assert target.read_text(encoding="utf-8") == expected
     captured = capsys.readouterr()
     assert (captured.out == "") == (broken == "annotations.json")
-    assert captured.err.count("not rendered") == 1
-    assert captured.err.startswith(broken)
+    if text is None:  # missing, not broken: skipped without a line
+        assert captured.err == ""
+    else:
+        assert captured.err.count("not rendered") == 1
+        assert captured.err.startswith(broken)
 
 
 def test_render_cuts_the_summary_with_a_link_to_the_run(tmp_path: Path) -> None:

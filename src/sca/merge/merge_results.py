@@ -269,8 +269,9 @@ def run_merge(
     return report, summary
 
 
-def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None, prog: str | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
+        prog=prog,
         description="Merge per-target scan results of an SCA scheduled scan."
     )
     parser.add_argument("--targets-file", required=True, type=Path)
@@ -289,8 +290,8 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+def main(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
+    args = parse_args(argv, prog)
 
     def body(notes: Annotations) -> tuple[str, dict[str, Any]]:
         context = read_run_context()
