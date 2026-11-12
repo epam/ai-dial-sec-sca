@@ -112,11 +112,14 @@ def append_text(path: str, text: str) -> None:
 
 
 def read_part(path: Path, read: Callable[[Path], Any]) -> Any:
-    """What ``read`` makes of the file; None, with a line on stderr, if the file is
-    missing or not what the command writes (the other files are still rendered).
+    """What ``read`` makes of the file; None if the command did not write it (not
+    every command writes a summary), None with a line on stderr if it is not what
+    the command writes (the other files are still rendered).
     """
     try:
         return read(path)
+    except FileNotFoundError:
+        return None
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"{path.name} not rendered: {error!r}", file=sys.stderr)
         return None
