@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Action inputs and outputs are unchanged.
+
+### Added
+
+- Run context `SCA_RUN_*` (`SCA_RUN_HOST`, `_REPO`, `_ID`, `_ATTEMPT`, `_URL`, `_EVENT`, `_ACTOR`, `_ENGINE_REF`): the commands of the scan engine no longer read `GITHUB_*` variables; the composite actions map the GitHub values.
+- `outputs.json`, `annotations.json` and `summary.md` in the output directory of a command (also when it fails): the step outputs, the workflow annotations and the job summary are rendered from them by `actions/_github/github_adapter.py`; the commands print no workflow commands.
+- `host` in `targets.json` and `report.json`.
+
+### Changed
+
+- One Python package, `ai-dial-sec-sca` (src layout), with the command `sca` (`targets`, `osv`, `merge`, `plan`); the actions run `python -P -m sca <command>` so the checked-out workspace cannot shadow the engine.
+- `sca targets` exits 2 on a usage error.
+- **BREAKING for direct consumers:** the packages `sca-rules` and `sca-fix-plan` in subdirectories are gone; import `sca.rules` and `sca.plan` from `ai-dial-sec-sca`. The scripts are no longer runnable by path; use `python -m sca <command>`.
+
 ## v0.8.1
 
 `report.json` stays at `schema_version` 4; the two new fields are additive and appended at the end of a record. Without them the report is the v0.8.0 report byte for byte.

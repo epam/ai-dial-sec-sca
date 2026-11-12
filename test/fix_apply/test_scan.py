@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from apply import process_line
+from sca.fix.apply import process_line
 from builders import file, finding, item, line, outcome, tools
-from scan import (
+from sca.fix.scan import (
     Finding,
     ScanError,
     detect,
@@ -170,7 +170,7 @@ def lockfile_command(
             (Path(kwargs["cwd"]) / "gradle.lockfile").write_text("", encoding="utf-8")
         return subprocess.CompletedProcess(command, exit_code, "", "no")
 
-    monkeypatch.setattr("scan.subprocess.run", run)
+    monkeypatch.setattr("sca.fix.scan.subprocess.run", run)
 
 
 def test_n6_1_gradle_build_without_a_lockfile_fails_the_detector(
@@ -336,7 +336,7 @@ def test_n6_1_image_tag_has_a_tag_part_for_osv_scanner(
             command, 1 if command[0] == "docker" else 0, "", ""
         )
 
-    monkeypatch.setattr("scan.subprocess.run", run)
+    monkeypatch.setattr("sca.fix.scan.subprocess.run", run)
     with pytest.raises(ScanError, match="docker build failed"):
         scan_image(tmp_path, "docker/Dockerfile.app")
     tag = commands[0][commands[0].index("-t") + 1]
@@ -350,13 +350,13 @@ def test_n10_2_tool_versions(monkeypatch: pytest.MonkeyPatch) -> None:
         "JavaDB": {"UpdatedAt": "2026-11-04T00:00:00Z"},
     }
     monkeypatch.setattr(
-        "scan.subprocess.run",
+        "sca.fix.scan.subprocess.run",
         lambda command, **kw: subprocess.CompletedProcess(
             command, 0, json.dumps(trivy), ""
         ),
     )
     monkeypatch.setattr(
-        "scan.run_command",
+        "sca.fix.scan.run_command",
         lambda command: subprocess.CompletedProcess(
             command, 0, "osv-scanner version: 2.7.0\nosv-scalibr version: 0.5\n", ""
         ),
@@ -411,7 +411,7 @@ def test_n6_1_rule_6_missing_trivy_binary_is_a_scan_error(
     def run(command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         raise FileNotFoundError(command[0])
 
-    monkeypatch.setattr("scan.subprocess.run", run)
+    monkeypatch.setattr("sca.fix.scan.subprocess.run", run)
     with pytest.raises(ScanError, match="trivy fs failed"):
         scan_tree(tmp_path)
     with pytest.raises(ScanError, match="versions"):

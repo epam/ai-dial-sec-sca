@@ -6,9 +6,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from apply import Tools
-from dependabot import Outcome
-from scan import Finding
+from sca.fix.apply import Tools
+from sca.fix.dependabot import Outcome
+from sca.fix.scan import Finding
 
 
 def item(

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-dial-sec-sca"
+version = "0.9.0.dev0"
+description = "The SCA scan engine of AI DIAL: resolve targets, query OSV, merge the scan results, plan fixes"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+sca = "sca.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# the GitHub adapter is a script run by path, not a package
+pythonpath = ["actions/_github"]

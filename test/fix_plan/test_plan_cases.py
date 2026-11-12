@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from cases import CASES, load_case
-from sca_fix_plan import cli as fix_plan
+from sca.plan import cli as fix_plan
 
 DEV = "development runs "
 SAME_MAJOR = "lowest fixed version in the same major"

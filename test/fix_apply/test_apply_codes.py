@@ -7,13 +7,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-import apply_codes
-import fix_apply
+from sca.fix import apply_codes
+from sca.fix import fix_apply
 import pytest
-from apply import process_line
+from sca.fix.apply import process_line
 from builders import TOOL_VERSIONS, file, finding, item, line, outcome, tools
-from dependabot import TIMEOUT
-from scan import BuildError, Finding, ScanError
+from sca.fix.dependabot import TIMEOUT
+from sca.fix.scan import BuildError, Finding, ScanError
 from test_apply import (
     NODE,
     PACKAGE,

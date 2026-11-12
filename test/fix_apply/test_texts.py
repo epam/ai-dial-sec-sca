@@ -2,12 +2,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-import fix_apply
-from apply import lock_tools
-from files import Journal
+from sca.fix import fix_apply
+from sca.fix.apply import lock_tools
+from sca.fix.files import Journal
 import pytest
 from builders import item, line
-from texts import pr_body, summary
+from sca.fix.texts import pr_body, summary
 from texts_builders import record, result
 
 GOLDEN = Path(__file__).parent / "golden"

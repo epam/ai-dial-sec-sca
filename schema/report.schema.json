@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SCA report.json schema 4 (K3)",
+  "description": "The report of one scan run (engine v0.8.1 fields plus the additive K3 header fields). Required = what consumers rely on in every schema 4 report; every field added after v0.7.0 is optional so that an N-1 report validates. Unknown keys are allowed.",
+  "type": "object",
+  "required": ["schema_version", "repo", "commit_sha", "default_branch", "run_id", "run_url", "generated_utc", "tools", "targets", "versions"],
+  "properties": {
+    "schema_version": {"const": 4},
+    "engine": {"type": ["string", "null"], "description": "Engine ref: package tag, branch or commit SHA; null when unknown."},
+    "engine_image": {"type": ["string", "null"], "description": "Additive. Image digest (sha256:...) when the engine ran from an image."},
+    "repo": {"type": "string", "description": "Repo id, owner/name (opaque to consumers)."},
+    "host": {"type": "string", "description": "Additive. Host of the repo, e.g. github.com."},
+    "platform": {"enum": ["github", "gitlab", "ado"], "description": "Additive."},
+    "commit_sha": {"type": "string"},
+    "default_branch": {"type": "string"},
+    "run_id": {"type": "string"},
+    "run_attempt": {"type": ["integer", "null"]},
+    "run_url": {"type": "string"},
+    "generated_utc": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"},
+    "event": {"type": "string", "description": "Raw platform event name; absent in old reports."},
+    "trigger": {"enum": ["schedule", "manual", "push", "other"], "description": "Additive. Neutral form of event."},
+    "actor": {"type": "string"},
+    "scan_ref": {"type": "string"},
+    "forced_image_scan": {"const": true},
+    "tools": {
+      "type": "object",
+      "required": ["trivy", "trivy_db", "trivy_java_db", "osv_scanner", "osv_queried_at"],
+      "properties": {
+        "trivy": {"type": ["string", "null"]},
+        "trivy_db": {"type": ["string", "null"]},
+        "trivy_java_db": {"type": ["string", "null"]},
+        "osv_scanner": {"type": ["string", "null"]},
+        "osv_queried_at": {"type": ["string", "null"]},
+        "oras": {"type": ["string", "null"], "description": "Additive."}
+      }
+    },
+    "targets": {"type": "array", "items": {"$ref": "#/$defs/target"}},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "versions": {"type": "array", "items": {"$ref": "#/$defs/version"}},
+    "ignores": {"type": ["array", "null"], "items": {"$ref": "#/$defs/ignore"}},
+    "ignores_error": {"type": ["string", "null"]},
+    "acceptances": {"type": "array", "items": {"type": "object"}, "description": "Only when targets.json had acceptances: the rules as given plus expired, bad_expiry, bad_rule, matched."}
+  },
+  "$defs": {
+    "severity": {"enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]},
+    "class": {"enum": ["lang", "os"]},
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "target": {
+      "type": "object",
+      "description": "One scan of one target: the Trivy and the OSV scan of a target are two entries with one id.",
+      "required": ["id", "scanner", "kind", "ref", "status", "reason", "packages_scanned"],
+      "properties": {
+        "id": {"type": "string"},
+        "scanner": {"enum": ["trivy", "osv"]},
+        "kind": {"enum": ["fs", "image"]},
+        "ref": {"type": ["string", "null"], "description": "Git ref or image tag (git_ref, else tag of the target)."},
+        "commit_sha": {"type": ["string", "null"]},
+        "image": {"type": ["string", "null"]},
+        "image_digest": {"type": ["string", "null"]},
+        "status": {"enum": ["ok", "failed", "not_applicable"]},
+        "reason": {"type": ["string", "null"]},
+        "packages_scanned": {"type": ["integer", "null"]},
+        "image_scan_disabled": {"const": true},
+        "os": {
+          "type": ["object", "null"],
+          "description": "Trivy image targets only.",
+          "properties": {"family": {"type": ["string", "null"]}, "name": {"type": ["string", "null"]}, "eosl": {"type": "boolean"}}
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "description": "Raw layer: one vulnerability in one package of one target from one scanner.",
+      "required": ["target", "scanner", "id", "names", "pkg", "version", "class", "severity"],
+      "properties": {
+        "target": {"type": "string"},
+        "scanner": {"enum": ["trivy", "osv"]},
+        "id": {"type": "string"},
+        "aliases": {"$ref": "#/$defs/strings"},
+        "names": {"$ref": "#/$defs/strings"},
+        "published": {"type": ["string", "null"]},
+        "modified": {"type": ["string", "null"]},
+        "cvss": {"$ref": "#/$defs/cvss"},
+        "pkg": {"type": "string"},
+        "version": {"type": "string"},
+        "ecosystem": {"type": ["string", "null"]},
+        "class": {"$ref": "#/$defs/class"},
+        "locations": {"$ref": "#/$defs/strings"},
+        "severity": {"$ref": "#/$defs/severity"},
+        "fixed_version": {"type": "string"},
+        "dev": {"type": "boolean"},
+        "relationship": {"type": ["string", "null"]},
+        "chain": {"$ref": "#/$defs/strings"},
+        "title": {"type": ["string", "null"]},
+        "summary": {"type": ["string", "null"]},
+        "src_pkg": {"type": ["string", "null"]},
+        "url": {"type": ["string", "null"]},
+        "accepted": {"type": "object"}
+      }
+    },
+    "cvss": {
+      "type": ["object", "null"],
+      "properties": {"score": {"type": ["number", "null"]}, "vector": {"type": ["string", "null"]}, "source": {"type": ["string", "null"]}}
+    },
+    "version": {
+      "type": "object",
+      "description": "All targets of one ref.",
+      "required": ["ref", "kind", "latest", "status", "targets", "counts", "vulns"],
+      "properties": {
+        "ref": {"type": "string"},
+        "kind": {"enum": ["development", "release", "candidate"]},
+        "latest": {"type": "boolean"},
+        "status": {"enum": ["ok", "failed"], "description": "failed only if a target scan failed; then records and counts are partial."},
+        "role": {"enum": ["dev", "rc", "rel", "rel-1", null], "description": "Since v0.8.0. Slot of the version; null = not counted."},
+        "targets": {"$ref": "#/$defs/strings"},
+        "counts": {
+          "type": "object",
+          "required": ["c", "h", "m", "l", "unknown", "all", "fixable"],
+          "properties": {
+            "c": {"type": "integer", "minimum": 0},
+            "h": {"type": "integer", "minimum": 0},
+            "m": {"type": "integer", "minimum": 0},
+            "l": {"type": "integer", "minimum": 0},
+            "unknown": {"type": "integer", "minimum": 0},
+            "all": {"type": "integer", "minimum": 0},
+            "fixable": {"type": "integer", "minimum": 0}
+          }
+        },
+        "vulns": {"type": "array", "items": {"$ref": "#/$defs/vuln"}},
+        "packages": {"type": "array", "items": {"$ref": "#/$defs/package"}}
+      }
+    },
+    "vuln": {
+      "type": "object",
+      "description": "One vulnerability in one package of one version; sorted by (class, norm(pkg), id).",
+      "required": ["id", "names", "pkg", "class", "severity", "fixed", "dev", "installed", "where", "sources"],
+      "properties": {
+        "id": {"type": "string"},
+        "names": {"$ref": "#/$defs/strings"},
+        "pkg": {"type": "string"},
+        "pkg_key": {"type": "string", "description": "Since v0.8.0. norm(pkg)."},
+        "src_pkg": {"type": ["string", "null"], "description": "Since v0.8.0."},
+        "class": {"$ref": "#/$defs/class"},
+        "severity": {"$ref": "#/$defs/severity"},
+        "fixed": {"type": "string", "description": "Fixed versions joined with a comma and a space; empty = no fix."},
+        "dev": {"type": "boolean"},
+        "installed": {"$ref": "#/$defs/strings"},
+        "where": {"$ref": "#/$defs/strings", "description": "Target ids."},
+        "sources": {"type": "array", "items": {"enum": ["trivy", "osv"]}},
+        "published": {"type": ["string", "null"]},
+        "modified": {"type": ["string", "null"]},
+        "cvss": {"$ref": "#/$defs/cvss"},
+        "aliases": {"$ref": "#/$defs/strings"},
+        "ecosystem": {"type": ["string", "null"]},
+        "relationship": {"type": ["string", "null"]},
+        "locations": {"$ref": "#/$defs/strings"},
+        "title": {"type": ["string", "null"], "description": "Since v0.8.0."},
+        "accepted": {"type": ["object", "null"], "properties": {"until": {"type": "string"}}},
+        "upgrades": {
+          "type": "array",
+          "description": "Since v0.8.1.",
+          "items": {
+            "type": "object",
+            "required": ["installed", "target", "reason"],
+            "properties": {
+              "installed": {"type": "string"},
+              "target": {"type": ["string", "null"]},
+              "reason": {"enum": ["needs_major", "no_fixed_version", "version_unparsable", "image_rebuild", null]}
+            }
+          }
+        },
+        "dev_state": {"enum": ["fixed", "removed", "open", "incomplete", null], "description": "Since v0.8.1."}
+      }
+    },
+    "package": {
+      "type": "object",
+      "required": ["pkg", "class", "installed", "where"],
+      "properties": {
+        "pkg": {"type": "string"},
+        "pkg_key": {"type": "string"},
+        "src_pkg": {"type": ["string", "null"]},
+        "class": {"$ref": "#/$defs/class"},
+        "installed": {"$ref": "#/$defs/strings"},
+        "where": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "ignore": {
+      "type": "object",
+      "description": "One line of the .trivyignore of the default branch.",
+      "required": ["id", "until", "expired", "bad_expiry", "no_expiry", "matched"],
+      "properties": {
+        "id": {"type": "string"},
+        "until": {"type": ["string", "null"]},
+        "expired": {"type": "boolean"},
+        "bad_expiry": {"type": "boolean"},
+        "no_expiry": {"type": "boolean"},
+        "matched": {"type": "boolean"},
+        "reason": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

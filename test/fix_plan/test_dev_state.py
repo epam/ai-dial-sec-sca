@@ -1,5 +1,5 @@
 """The engine's ``dev_state`` of a record and ``classify()`` give the same state for the
-same record (both are ``sca_rules.Development``; this checks the two ways of feeding it).
+same record (both are ``sca.rules.Development``; this checks the two ways of feeding it).
 """
 
 import json
@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import vulns
+from sca.merge import vulns
 from cases import CASES, load_case
-from sca_fix_plan import classify
-from sca_rules import identifiers, norm
+from sca.plan import classify
+from sca.rules import identifiers, norm
 
 GOLDEN = Path(__file__).resolve().parents[1] / "sca" / "golden"
 

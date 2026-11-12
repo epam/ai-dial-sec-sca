@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 
 import pytest
-import sca_fix_plan
+from sca import plan as sca_fix_plan
 from cases import CASES, load_case
 from helpers import record
-from sca_fix_plan import Config, build_plan, merge_reports, upgrade_target
+from sca.plan import Config, build_plan, merge_reports, upgrade_target
 
 
 def test_exported() -> None:

@@ -3,13 +3,8 @@
 import re
 
 import pytest
-from summary import (
-    STEP_SUMMARY_LIMIT_BYTES,
-    build_summary,
-    target_label,
-    truncate_summary,
-)
-from vulns import build_versions, versions_of
+from sca.merge.summary import build_summary, target_label
+from sca.merge.vulns import build_versions, versions_of
 
 
 def target(
@@ -291,24 +286,6 @@ def test_summary_ends_with_the_artifact_footer():
     )
 
 
-def test_a_summary_that_fits_is_not_touched():
-    assert truncate_summary("short\n", None) == "short\n"
-
-
-@pytest.mark.parametrize("run_url", [None, "https://example.test/run/7"])
-def test_a_long_summary_is_cut_at_a_line_with_open_blocks_closed_and_a_note(run_url):
-    text = "<details><summary>x</summary>\n" + "| row |\n" * (
-        STEP_SUMMARY_LIMIT_BYTES // 8
-    )
-    cut = truncate_summary(text, run_url)
-    assert len(cut.encode()) <= STEP_SUMMARY_LIMIT_BYTES
-    body, _, note = cut.partition("\n> The summary is cut")
-    assert body.rstrip().endswith("</details>")
-    assert body.count("<details") == body.count("</details>")
-    assert f"it is {len(text.encode())} bytes" in note
-    assert (run_url in note) if run_url else "artifact of this run" in note
-
-
 def test_a_failed_image_without_a_tag_shows_a_marker_not_none():
     t = target("app-release", kind="image", ref=None, status="failed", reason="no tag")
     text = build_summary(report([t, {**t, "scanner": "osv"}], []))
@@ -332,16 +309,6 @@ def test_findings_sharing_an_alias_are_one_vulnerability_with_the_cve_shown():
     text = build_summary(report([target(src), target(src, "osv")], findings))
     assert "1 library, 0 OS packages, 1 fixable" in text
     assert "[CVE-2026-9](" in text and "[GHSA-x]" not in text
-
-
-def test_the_cut_leaves_room_for_every_block_it_closes():
-    text = "<details><summary>x</summary>\n" * 5 + "| row |\n" * (
-        STEP_SUMMARY_LIMIT_BYTES // 8
-    )
-    cut = truncate_summary(text, None)
-    assert len(cut.encode()) <= STEP_SUMMARY_LIMIT_BYTES
-    assert cut.count("<details") == cut.count("</details>") == 5
-
 
 
 def rows_of(text, version):

@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from dependabot import TIMEOUT, Settings, run_job
-from override import (
+from sca.fix.dependabot import TIMEOUT, Settings, run_job
+from sca.fix.override import (
     OverrideError,
     add_overrides,
     below_target,

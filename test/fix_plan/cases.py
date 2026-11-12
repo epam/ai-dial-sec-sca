@@ -68,7 +68,7 @@ def cut(report: dict[str, Any], packages: tuple[str, ...]) -> dict[str, Any]:
     """Keep the header, the targets and, per version, the records and packages of
     ``packages``; the findings and the tool data are not needed.
     """
-    from sca_rules import norm
+    from sca.rules import norm
 
     keep = {norm(p) for p in packages}
     versions = [
@@ -117,7 +117,7 @@ def cut_all(testbed: Path) -> None:
 
 
 def plan_all(testbed: Path, output: Path) -> None:
-    from sca_fix_plan import cli as fix_plan
+    from sca.plan import cli as fix_plan
 
     for case in CASES:
         report_path, dev_path = source_paths(testbed, case)
@@ -137,8 +137,6 @@ def plan_all(testbed: Path, output: Path) -> None:
 
 
 if __name__ == "__main__":
-    for name in ("sca_fix_plan", "sca_rules"):
-        sys.path.insert(0, str(HERE.parents[1] / "actions" / name))
     if len(sys.argv) == 3 and sys.argv[1] == "cut":
         cut_all(Path(sys.argv[2]))
     elif len(sys.argv) == 4 and sys.argv[1] == "plan":

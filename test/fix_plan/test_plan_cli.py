@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 from helpers import development, record, report, version
-from sca_fix_plan import cli as fix_plan
+from sca.plan import cli as fix_plan
 
 
 def write_reports(tmp_path: Path) -> list[str]:
@@ -29,6 +29,21 @@ def test_writes_json_and_markdown(tmp_path: Path) -> None:
     assert "| lib\\|x | lang | 1.0.0 -> 1.0.5 | dependabot |" in markdown
 
 
+def test_writes_outputs_json_with_the_plan_file(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    fix_plan.main(["--reports", *write_reports(tmp_path), "--output-dir", str(out)])
+    outputs = json.loads((out / "outputs.json").read_text(encoding="utf-8"))
+    assert outputs == {
+        "contract": 1,
+        "command": "plan",
+        "status": "ok",
+        "engine": None,
+        "message": None,
+        "outputs": {"plan-file": str(out / "fix-plan.json")},
+    }
+    assert json.loads((out / "annotations.json").read_text(encoding="utf-8")) == []
+
+
 def test_same_input_same_output(tmp_path: Path) -> None:
     paths = write_reports(tmp_path)
     for name in ("one", "two"):
@@ -51,4 +66,7 @@ def test_errors_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> No
     assert "unknown key x" in capsys.readouterr().err
     assert fix_plan.main(["--reports", paths[0], "--output-dir", out]) == 1
     assert "development" in capsys.readouterr().err
-    assert not (tmp_path / "out").exists()
+    assert not (tmp_path / "out" / "fix-plan.json").exists()
+    outputs = json.loads((tmp_path / "out" / "outputs.json").read_text(encoding="utf-8"))
+    assert (outputs["command"], outputs["status"], outputs["outputs"]) == ("plan", "error", {})
+    assert "development" in outputs["message"]

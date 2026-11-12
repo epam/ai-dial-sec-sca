@@ -1,5 +1,6 @@
-"""Tests for sca_resolve_targets/resolve_targets.py (fake transport, no network)."""
+"""Tests for sca/targets/resolve_targets.py (fake transport, no network)."""
 
+import argparse
 import json
 import subprocess
 import urllib.parse
@@ -8,18 +9,20 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import resolve_targets as rt
+from sca.targets import resolve_targets as rt
+from sca.lib.context import UsageError, read_run_context
 
 REPOSITORY = "example/app"
 SHA = "a" * 40
 ENV = {
-    "GITHUB_RUN_ID": "42",
-    "GITHUB_SERVER_URL": "https://github.com",
-    "GITHUB_REPOSITORY": "example/caller",
-    "GITHUB_EVENT_NAME": "workflow_dispatch",
-    "GITHUB_TRIGGERING_ACTOR": "octocat",
+    "SCA_RUN_HOST": "github.com",
+    "SCA_RUN_REPO": "example/caller",
+    "SCA_RUN_ID": "42",
+    "SCA_RUN_URL": "https://github.com/example/caller/actions/runs/42",
+    "SCA_RUN_EVENT": "workflow_dispatch",
+    "SCA_RUN_ACTOR": "octocat",
 }
-CALLER = "example/caller"
+CTX = read_run_context(ENV)
 
 
 class FakeRunner:
@@ -125,24 +128,26 @@ def run_resolve_targets(
     images: list[str],
     token: str | None = "tkn",
     scan_tag: str | None = None,
+    notes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """The targets document; what the GitHub calls noticed is added to ``notes``."""
     inputs = rt.Inputs(
         repository=REPOSITORY,
-        caller_repository=CALLER,
         images=images,
         **({"scan_tag": scan_tag} if scan_tag else {}),
     )
-    return rt.resolve_targets(
-        inputs,
-        rt.GitHubClient(runner),
-        rt.RegistryClient(runner, "ghcr.io", token),
-        ENV,
+    github = rt.GitHubClient(runner, notes if notes is not None else [])
+    doc = rt.resolve_targets(
+        inputs, github, rt.RegistryClient(runner, "ghcr.io", token), CTX
     )
+    return doc
 
 
-def run_env(output_dir: Path, **overrides: str) -> dict[str, str]:
-    """The environment the action passes to the script."""
-    return {**ENV, "REPOSITORY": REPOSITORY, "OUTPUT_DIR": str(output_dir), **overrides}
+def parse(output_dir: Path, *extra: str) -> argparse.Namespace:
+    """The arguments the action passes to the command; a later one wins."""
+    return rt.parse_args(
+        ["--repository", REPOSITORY, "--output-dir", str(output_dir), *extra]
+    )
 
 
 def trivy(targets_doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -623,22 +628,20 @@ def parse_github_output(text: str) -> dict[str, str]:
     return dict(line.split("=", 1) for line in text.splitlines())
 
 
-def test_run_writes_resolve_json_and_outputs(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_run_writes_targets_json_and_returns_the_outputs(tmp_path: Path) -> None:
     t = FakeRunner()
     github_routes(t, [stable("1.1.14", "2025-01-01T00:00:00Z")])
     tag_routes(t, "1.1.14", "b" * 40)
     t.add(tags_url("example/x"), tags_out(["development"]))
-    output_file = tmp_path / "github_output"
-    env = run_env(
-        tmp_path / "out",
-        GITHUB_OUTPUT=str(output_file),
-        GITHUB_TOKEN="tkn",
-        IMAGES="example/x\n",
+    notes: list[dict[str, Any]] = []
+    status, outputs = rt.run(
+        parse(tmp_path / "out", "--images", "example/x\n"),
+        {**ENV, "GH_TOKEN": "tkn"},
+        notes,
+        t,
     )
-    rt.run(env, t)
 
+    assert status == "ok"
     targets_doc = json.loads(
         (tmp_path / "out" / "targets.json").read_text(encoding="utf-8")
     )
@@ -648,20 +651,20 @@ def test_run_writes_resolve_json_and_outputs(
         "x-development",
         "x-1.1.14",
     ]
-    outputs = parse_github_output(output_file.read_text(encoding="utf-8"))
     assert outputs["targets-file"] == str(tmp_path / "out" / "targets.json")
-    assert " " not in outputs["matrix"]
-    assert [m["id"] for m in json.loads(outputs["matrix"])] == [
+    assert [m["id"] for m in outputs["matrix"]] == [
         "source-development",
         "source-1.1.14",
         "x-development",
     ]
-    console = capsys.readouterr().out
-    assert (
-        "::notice title=Scan target x-1.1.14 skipped::release 1.1.14 not published"
-        in console
-    )
-    assert "x-development" in console
+    assert notes == [
+        {
+            "level": "notice",
+            "message": "release 1.1.14 not published for this image",
+            "title": "Scan target x-1.1.14 skipped",
+            "target": "x-1.1.14",
+        }
+    ]
 
 
 def test_run_uses_token_from_environment(
@@ -671,40 +674,81 @@ def test_run_uses_token_from_environment(
     github_routes(t, [stable("1.1.14", "2025-01-01T00:00:00Z")])
     tokens: list[str | None] = []
     monkeypatch.setattr(rt, "make_runner", lambda token: tokens.append(token) or t)
-    rt.run(run_env(tmp_path, GITHUB_TOKEN="from-env"), None)
+    rt.run(parse(tmp_path), {**ENV, "GH_TOKEN": "from-env"}, [], None)
     assert tokens == ["from-env"]
 
 
 @pytest.mark.parametrize(
-    "extra",
-    [
-        {"REPOSITORY": "nope"},
-        {"REPOSITORY": ""},
-    ],
+    "repository",
+    ["nope", ""],
 )
-def test_run_rejects_invalid_inputs(tmp_path: Path, extra: dict[str, str]) -> None:
-    with pytest.raises(rt.ResolveError):
-        rt.run(run_env(tmp_path, **extra), FakeRunner())
+def test_run_rejects_invalid_inputs(tmp_path: Path, repository: str) -> None:
+    args = parse(tmp_path, "--repository", repository)
+    with pytest.raises(UsageError, match="owner/name"):
+        rt.run(args, ENV, [], FakeRunner())
 
 
 def test_run_defaults_the_registry(tmp_path: Path) -> None:
-    inputs = rt.Inputs.from_environ(run_env(tmp_path))
-    assert inputs == rt.Inputs(repository=REPOSITORY, caller_repository=CALLER)
+    inputs = rt.Inputs.from_args(parse(tmp_path), None)
+    assert inputs == rt.Inputs(repository=REPOSITORY)
     assert inputs.registry == "ghcr.io"
 
 
 def test_main_reports_fatal_error_and_exits_non_zero(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     t = FakeRunner()
     t.add(f"repos/{REPOSITORY}", http_error(404))
     monkeypatch.setattr(rt, "make_runner", lambda token: t)
-    for name, value in run_env(tmp_path).items():
+    for name, value in ENV.items():
         monkeypatch.setenv(name, value)
-    code = rt.main()
+    code = rt.main(["--repository", REPOSITORY, "--output-dir", str(tmp_path)])
     assert code == 1
-    assert "::error" in capsys.readouterr().out
+    outputs = json.loads((tmp_path / "outputs.json").read_text(encoding="utf-8"))
+    assert (outputs["command"], outputs["status"], outputs["outputs"]) == (
+        "targets",
+        "error",
+        {},
+    )
+    (annotation,) = json.loads((tmp_path / "annotations.json").read_text("utf-8"))
+    assert annotation["level"] == "error"
+    assert annotation["title"] == "Scan target resolution failed"
     assert not (tmp_path / "targets.json").exists()
+
+
+def test_main_keeps_the_annotations_the_client_recorded_before_a_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(rt, "MAX_RELEASE_PAGES", 1)
+    t = FakeRunner()
+    github_routes(t, many_stables(100))
+
+    def fail_after_listing(inputs, github, registry, context):
+        github.releases(REPOSITORY)
+        raise rt.ResolveError("then it failed")
+
+    monkeypatch.setattr(rt, "make_runner", lambda token: t)
+    monkeypatch.setattr(rt, "resolve_targets", fail_after_listing)
+    for name, value in ENV.items():
+        monkeypatch.setenv(name, value)
+    code = rt.main(["--repository", REPOSITORY, "--output-dir", str(tmp_path)])
+    assert code == 1
+    notes = json.loads((tmp_path / "annotations.json").read_text(encoding="utf-8"))
+    assert [(n["level"], n["title"]) for n in notes] == [
+        ("warning", "Release list truncated"),
+        ("error", "Scan target resolution failed"),
+    ]
+
+
+def test_main_without_the_run_context_exits_2(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name in ENV:
+        monkeypatch.delenv(name, raising=False)
+    code = rt.main(["--repository", REPOSITORY, "--output-dir", str(tmp_path)])
+    assert code == 2
+    outputs = json.loads((tmp_path / "outputs.json").read_text(encoding="utf-8"))
+    assert outputs["status"] == "error" and "SCA_RUN_HOST" in outputs["message"]
 
 
 def test_render_table_and_annotations() -> None:
@@ -738,8 +782,18 @@ def test_render_table_and_annotations() -> None:
     assert "source" in table
     assert "ghcr.io/x:1" in table
     assert rt.annotations(targets) == [
-        "::warning title=Scan target x-1 failed to resolve::boom",
-        "::notice title=Scan target x-2 skipped::nope",
+        {
+            "level": "warning",
+            "message": "boom",
+            "title": "Scan target x-1 failed to resolve",
+            "target": "x-1",
+        },
+        {
+            "level": "notice",
+            "message": "nope",
+            "title": "Scan target x-2 skipped",
+            "target": "x-2",
+        },
     ]
 
 
@@ -791,12 +845,11 @@ def test_release_set_lines_beyond_the_cap_are_dropped() -> None:
     targets_doc = rt.resolve_targets(
         rt.Inputs(
             repository=REPOSITORY,
-            caller_repository=CALLER,
-            release_lines=3,
+                release_lines=3,
         ),
-        rt.GitHubClient(t),
+        rt.GitHubClient(t, []),
         rt.RegistryClient(t, "ghcr.io"),
-        ENV,
+        CTX,
     )
     assert list(by_id(targets_doc)) == [
         "source-development",
@@ -931,10 +984,9 @@ def test_release_set_prerelease_with_an_unversioned_tag_is_ignored() -> None:
     assert list(targets) == ["source-development", "source-0.22.0"]
 
 
-def test_release_set_unflagged_rc_is_left_out_with_one_notice(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_release_set_unflagged_rc_is_left_out_with_one_notice() -> None:
     t = FakeRunner()
+    notes: list[dict[str, Any]] = []
     github_routes(
         t,
         [
@@ -942,21 +994,22 @@ def test_release_set_unflagged_rc_is_left_out_with_one_notice(
             {**candidate("0.49.0-rc.1", "2025-01-01T00:00:00Z"), "prerelease": False},
         ],
     )
-    targets = by_id(run_resolve_targets(t, []))
+    targets = by_id(run_resolve_targets(t, [], notes=notes))
     assert list(targets) == ["source-development", "source-0.49.2"]
-    notices = [
-        line for line in capsys.readouterr().out.splitlines() if "::notice" in line
-    ]
-    assert notices == [
-        "::notice title=Releases outside the X.Y.Z lines::1 stable release(s) not "
-        "scanned, the tag is not X.Y.Z (newest: 0.49.0-rc.1)"
+    assert notes == [
+        {
+            "level": "notice",
+            "message": "1 stable release(s) not scanned, the tag is not X.Y.Z "
+            "(newest: 0.49.0-rc.1)",
+            "title": "Releases outside the X.Y.Z lines",
+            "target": None,
+        }
     ]
 
 
-def test_release_set_stable_tags_of_another_shape_give_one_notice(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_release_set_stable_tags_of_another_shape_give_one_notice() -> None:
     t = FakeRunner()
+    notes: list[dict[str, Any]] = []
     github_routes(
         t,
         [
@@ -966,22 +1019,21 @@ def test_release_set_stable_tags_of_another_shape_give_one_notice(
             stable("release-7", "2025-01-01T00:00:00Z"),
         ],
     )
-    doc = run_resolve_targets(t, [])
+    doc = run_resolve_targets(t, [], notes=notes)
     assert list(by_id(doc)) == ["source-development", "source-0.22.0"]
     assert len(doc["targets"]) == 4  # no row of an OSV twin for a skipped release
-    out = capsys.readouterr().out
-    assert out.count("::notice") == 1
-    assert "3 stable release(s) not scanned" in out
-    assert "(newest: dial-8.1.0)" in out
+    (notice,) = notes
+    assert notice["level"] == "notice"
+    assert "3 stable release(s) not scanned" in notice["message"]
+    assert "(newest: dial-8.1.0)" in notice["message"]
 
 
-def test_release_set_without_such_releases_gives_no_notice(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_release_set_without_such_releases_gives_no_notice() -> None:
     t = FakeRunner()
+    notes: list[dict[str, Any]] = []
     github_routes(t, [stable("0.22.0", "2025-02-01T00:00:00Z")])
-    run_resolve_targets(t, [])
-    assert "::notice" not in capsys.readouterr().out
+    run_resolve_targets(t, [], notes=notes)
+    assert notes == []
 
 
 def test_release_set_only_unscannable_releases_have_no_placeholder() -> None:
@@ -1011,14 +1063,13 @@ def many_stables(count: int) -> list[dict[str, Any]]:
     ]
 
 
-def test_release_set_reads_every_page_of_the_listing(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_release_set_reads_every_page_of_the_listing() -> None:
     t = FakeRunner()
+    notes: list[dict[str, Any]] = []
     # the only candidate is on the third page
     releases = [*many_stables(220), candidate("1.0.0-rc.1", "2024-01-01T00:00:00Z")]
     github_routes(t, releases)
-    targets = list(by_id(run_resolve_targets(t, [])))
+    targets = list(by_id(run_resolve_targets(t, [], notes=notes)))
     assert targets == [
         "source-development",
         "source-0.219.0",
@@ -1028,42 +1079,45 @@ def test_release_set_reads_every_page_of_the_listing(
     assert [u for u in t.urls if "releases?" in u] == [
         f"repos/{REPOSITORY}/releases?per_page=100&page={n}" for n in (1, 2, 3)
     ]
-    assert "::warning" not in capsys.readouterr().out
+    assert notes == []
 
 
-def test_release_set_a_full_last_page_asks_for_the_next_and_does_not_warn(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_release_set_a_full_last_page_asks_for_the_next_and_does_not_warn() -> None:
     t = FakeRunner()
+    notes: list[dict[str, Any]] = []
     github_routes(t, many_stables(100))
-    run_resolve_targets(t, [])
+    run_resolve_targets(t, [], notes=notes)
     assert t.urls.count(f"repos/{REPOSITORY}/releases?per_page=100&page=2") == 1
-    assert "::warning" not in capsys.readouterr().out
+    assert notes == []
 
 
 def test_release_set_page_cap_warns_and_still_builds(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(rt, "MAX_RELEASE_PAGES", 2)
     t = FakeRunner()
+    notes: list[dict[str, Any]] = []
     github_routes(t, many_stables(250))
-    targets = list(by_id(run_resolve_targets(t, [])))
+    targets = list(by_id(run_resolve_targets(t, [], notes=notes)))
     assert targets == ["source-development", "source-0.249.0", "source-0.248.0"]
     # the third page is never asked for (it is not routed)
     assert not any(u.endswith("page=3") for u in t.urls)
-    assert (
-        "::warning title=Release list truncated::the release set is built from the "
-        "newest 200 releases" in capsys.readouterr().out
-    )
+    assert notes == [
+        {
+            "level": "warning",
+            "message": "the release set is built from the newest 200 releases",
+            "title": "Release list truncated",
+            "target": None,
+        }
+    ]
 
 
-def test_release_set_partial_page_does_not_warn(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_release_set_partial_page_does_not_warn() -> None:
     t = FakeRunner()
+    notes: list[dict[str, Any]] = []
     github_routes(t, [stable("1.1.14", "2025-01-01T00:00:00Z")])
-    run_resolve_targets(t, [])
-    assert "::warning" not in capsys.readouterr().out
+    run_resolve_targets(t, [], notes=notes)
+    assert notes == []
 
 
 def test_release_set_one_tag_sha_failure_fails_only_that_tag() -> None:
@@ -1170,8 +1224,8 @@ def test_release_source_tag_that_cannot_be_resolved_is_a_failed_target() -> None
     )
     assert [m["id"] for m in rt.build_matrix(targets_doc)] == ["source-development"]
     assert any(
-        "source-0.12.0 failed to resolve" in line
-        for line in rt.annotations(targets_doc["targets"])
+        "source-0.12.0 failed to resolve" in note["title"]
+        for note in rt.annotations(targets_doc["targets"])
     )
 
 
@@ -1317,9 +1371,9 @@ def test_osv_twins_are_not_annotated_twice() -> None:
     github_routes(t, [stable("1.1.14", "2025-01-01T00:00:00Z")])
     t.add(tags_url("example/app"), tags_out(["development"]))
     targets_doc = run_resolve_targets(t, ["example/app"])
-    lines = rt.annotations(targets_doc["targets"])
-    assert len(lines) == 1
-    assert "app-1.1.14" in lines[0]
+    notes = rt.annotations(targets_doc["targets"])
+    assert len(notes) == 1
+    assert "app-1.1.14" in notes[0]["title"]
 
 
 def test_target_identity_is_scanner_and_id() -> None:
@@ -1346,12 +1400,8 @@ def test_run_adds_osv_twins(tmp_path: Path) -> None:
     t = FakeRunner()
     github_routes(t, [stable("1.1.14", "2025-01-01T00:00:00Z")])
     tag_routes(t, "1.1.14", "b" * 40)
-    output_file = tmp_path / "github_output"
-    env = {**ENV, "GITHUB_OUTPUT": str(output_file), "GITHUB_TOKEN": "tkn"}
-    env = {**run_env(tmp_path / "out"), **env}
-    rt.run(env, t)
-    outputs = parse_github_output(output_file.read_text(encoding="utf-8"))
-    assert [m["id"] for m in json.loads(outputs["matrix"])] == [
+    _, outputs = rt.run(parse(tmp_path / "out"), {**ENV, "GH_TOKEN": "tkn"}, [], t)
+    assert [m["id"] for m in outputs["matrix"]] == [
         "source-development",
         "source-1.1.14",
     ]
@@ -1381,12 +1431,11 @@ def test_image_scan_disabled_marks_only_image_osv_twins() -> None:
     t.add(tags_url("example/app"), tags_out(["development", "1.1.14"]))
     inputs = rt.Inputs(
         repository=REPOSITORY,
-        caller_repository=CALLER,
         images=["example/app"],
         image_scan=False,
     )
     twins = osv_twins(
-        rt.resolve_targets(inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), ENV)
+        rt.resolve_targets(inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX)
     )
     assert twins["source-development"].get("image_scan_disabled") is None
     assert twins["source-1.1.14"].get("image_scan_disabled") is None
@@ -1401,12 +1450,11 @@ def test_image_scan_enabled_leaves_no_flag_on_any_twin(image_scan: bool | None) 
     t.add(tags_url("example/app"), tags_out(["development", "1.1.14"]))
     inputs = rt.Inputs(
         repository=REPOSITORY,
-        caller_repository=CALLER,
         images=["example/app"],
         **({"image_scan": image_scan} if image_scan is not None else {}),
     )
     targets_doc = rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), ENV
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
     assert not any("image_scan_disabled" in t for t in targets_doc["targets"])
 
@@ -1417,12 +1465,11 @@ def test_image_scan_disabled_does_not_change_the_target_statuses() -> None:
     t.add(tags_url("example/app"), tags_out(["development", "1.1.14"]))
     inputs = rt.Inputs(
         repository=REPOSITORY,
-        caller_repository=CALLER,
         images=["example/app"],
         image_scan=False,
     )
     targets_doc = rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), ENV
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
     assert {t["status"] for t in targets_doc["targets"]} == {"pending"}
 
@@ -1437,26 +1484,26 @@ def test_image_scan_input_parsing(tmp_path: Path) -> None:
         ("0", False),
         ("no", False),
     ]:
-        inputs = rt.Inputs.from_environ(run_env(tmp_path, IMAGE_SCAN=raw))
+        inputs = rt.Inputs.from_args(parse(tmp_path, "--osv-image-scan", raw), None)
         assert inputs.image_scan is expected, raw
 
 
 def test_release_lines_input_parsing(tmp_path: Path) -> None:
     for raw, expected in [("2", 2), ("1", 1), ("", 2), (" 3 ", 3), ("0", 1), ("-4", 1)]:
-        inputs = rt.Inputs.from_environ(run_env(tmp_path, RELEASE_LINES=raw))
+        inputs = rt.Inputs.from_args(parse(tmp_path, "--release-lines", raw), None)
         assert inputs.release_lines == expected, raw
-    with pytest.raises(rt.ResolveError, match="release-lines must be a number"):
-        rt.Inputs.from_environ(run_env(tmp_path, RELEASE_LINES="abc"))
+    with pytest.raises(UsageError, match="release-lines must be a number"):
+        rt.Inputs.from_args(parse(tmp_path, "--release-lines", "abc"), None)
 
 
 def test_release_lines_input_drives_the_set(tmp_path: Path) -> None:
     t = FakeRunner()
     github_routes(t, two_lines())
     inputs = rt.Inputs(
-        repository=REPOSITORY, caller_repository=CALLER, release_lines=1
+        repository=REPOSITORY, release_lines=1
     )
     targets_doc = rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), ENV
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
     assert list(by_id(targets_doc)) == ["source-development", "source-0.22.0"]
 
@@ -1570,27 +1617,20 @@ def test_focus_run_with_empty_images_is_source_only() -> None:
 def test_whitespace_scan_tag_behaves_as_a_regular_run(tmp_path: Path, raw: str) -> None:
     t = FakeRunner()
     github_routes(t, [stable("1.1.14", "2025-01-01T00:00:00Z")])
-    inputs = rt.Inputs.from_environ(run_env(tmp_path, SCAN_TAG=raw))
+    inputs = rt.Inputs.from_args(parse(tmp_path, "--scan-tag", raw), None)
     assert inputs.scan_tag is None
     targets_doc = rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), ENV
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
     assert list(by_id(targets_doc)) == ["source-development", "source-1.1.14"]
     assert "scan_ref" not in targets_doc
 
 
-@pytest.mark.parametrize(
-    "missing", ["GITHUB_RUN_ID", "GITHUB_EVENT_NAME", "GITHUB_TRIGGERING_ACTOR"]
-)
-def test_run_without_the_event_header_fails(tmp_path: Path, missing: str) -> None:
+@pytest.mark.parametrize("missing", [n for n in ENV if n != "SCA_RUN_REPO"])
+def test_run_without_the_run_context_fails(tmp_path: Path, missing: str) -> None:
     env = {k: v for k, v in ENV.items() if k != missing}
-    t = FakeRunner()
-    github_routes(t, [])
-    inputs = rt.Inputs(repository=REPOSITORY, caller_repository=CALLER)
-    with pytest.raises(rt.ResolveError, match=missing):
-        rt.resolve_targets(
-            inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), env
-        )
+    with pytest.raises(UsageError, match=missing):
+        rt.run(parse(tmp_path), env, [], FakeRunner())
 
 
 def test_document_header_carries_event_actor_and_the_scan_ref() -> None:
@@ -1651,13 +1691,12 @@ def resolve_with(
     t.add(tags_url("example/app"), tags_out(["development", "1.1.14"]))
     inputs = rt.Inputs(
         repository=REPOSITORY,
-        caller_repository=CALLER,
         images=["example/app"],
         image_scan=image_scan,
         **({} if force_image_scan is None else {"force_image_scan": force_image_scan}),
     )
     return rt.resolve_targets(
-        inputs, rt.GitHubClient(t), rt.RegistryClient(t, "ghcr.io"), ENV
+        inputs, rt.GitHubClient(t, []), rt.RegistryClient(t, "ghcr.io"), CTX
     )
 
 
@@ -1689,15 +1728,17 @@ def test_force_image_scan_input_parsing(tmp_path: Path) -> None:
         ("0", False),
         ("anything", False),
     ]:
-        inputs = rt.Inputs.from_environ(run_env(tmp_path, FORCE_IMAGE_SCAN=raw))
+        inputs = rt.Inputs.from_args(parse(tmp_path, "--force-image-scan", raw), None)
         assert inputs.force_image_scan is expected, raw
-    assert rt.Inputs.from_environ(run_env(tmp_path)).force_image_scan is False
+    assert rt.Inputs.from_args(parse(tmp_path), None).force_image_scan is False
 
 
 def test_run_writes_the_forced_image_scan_to_targets_json(tmp_path: Path) -> None:
     t = FakeRunner()
     github_routes(t, [])
-    env = run_env(tmp_path / "out", IMAGE_SCAN="false", FORCE_IMAGE_SCAN="true")
-    rt.run(env, t)
+    args = parse(
+        tmp_path / "out", "--osv-image-scan", "false", "--force-image-scan", "true"
+    )
+    rt.run(args, ENV, [], t)
     doc = json.loads((tmp_path / "out" / "targets.json").read_text(encoding="utf-8"))
     assert doc["forced_image_scan"] is True

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SCA targets.json (K2)",
+  "description": "The target set of one scan run: written by an adapter or by the optional `sca targets --source github` resolver, read by osv, merge and the scan matrix. Unknown keys are allowed (additive evolution).",
+  "type": "object",
+  "required": ["repo", "default_branch", "commit_sha", "run_id", "run_url", "targets"],
+  "properties": {
+    "repo": {"type": "string", "description": "Repo id, owner/name (opaque to consumers)."},
+    "host": {"type": "string", "description": "Additive. Host of the repo, e.g. github.com."},
+    "platform": {"enum": ["github", "gitlab", "ado"], "description": "Additive."},
+    "default_branch": {"type": "string"},
+    "commit_sha": {"type": "string", "description": "Head of the default branch."},
+    "run_id": {"type": "string"},
+    "run_url": {"type": "string"},
+    "event": {"type": "string", "description": "Raw platform event name (schedule, workflow_dispatch). Written by the resolver, copied into report.json when present."},
+    "trigger": {"enum": ["schedule", "manual", "push", "other"], "description": "Additive. Neutral form of event (K1 SCA_RUN_TRIGGER)."},
+    "actor": {"type": "string"},
+    "scan_ref": {"type": "string", "description": "Only for a run focused on one tag."},
+    "forced_image_scan": {"const": true, "description": "Only when a manual run forced the OSV image scan on a repo that switched it off."},
+    "version_kinds": {
+      "type": "object",
+      "description": "Optional, caller-added. Ref (as given in a target) to version kind, for refs that are not semver tags.",
+      "additionalProperties": {"enum": ["development", "release", "candidate"]}
+    },
+    "acceptances": {
+      "type": "array",
+      "description": "Optional, caller-added risk acceptance rules (engine README, Acceptance rules). Other keys are passed through.",
+      "items": {"type": "object"}
+    },
+    "targets": {"type": "array", "items": {"$ref": "#/$defs/target"}}
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "description": "A Trivy target, or its OSV twin (same id, scanner osv; every Trivy target has one, listed after all Trivy targets).",
+      "required": ["id", "scanner", "kind", "status", "reason", "image", "tag", "ref", "git_ref", "commit_sha"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$", "description": "Names the subject, stable across runs, never contains the SHA. Unique per (scanner, id)."},
+        "scanner": {"enum": ["trivy", "osv"]},
+        "kind": {"enum": ["fs", "image"]},
+        "status": {"enum": ["pending", "failed", "not_applicable"], "description": "pending = to be scanned; the others are resolved already."},
+        "reason": {"type": ["string", "null"]},
+        "image": {"type": ["string", "null"], "description": "Image name without registry (kind image)."},
+        "tag": {"type": ["string", "null"], "description": "Image tag, or the release tag of a release source."},
+        "ref": {"type": ["string", "null"], "description": "Full image reference (kind image), else null."},
+        "git_ref": {"type": ["string", "null"], "description": "Branch or tag of a source target (kind fs)."},
+        "commit_sha": {"type": ["string", "null"]},
+        "image_scan_disabled": {"const": true, "description": "OSV twin of an image: the direct OSV image scan is off, the BOM query stays."},
+        "image_scan_disabled_reason": {"type": "string"}
+      }
+    }
+  }
+}

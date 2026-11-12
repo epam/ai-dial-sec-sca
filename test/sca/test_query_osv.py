@@ -1,4 +1,4 @@
-"""Tests for actions/sca_query_osv/query_osv.py (synthetic data, fake commands)."""
+"""Tests for sca/osv/query_osv.py (synthetic data, fake commands)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import query_osv as qo
+from sca.osv import query_osv as qo
 
 NOW = datetime(2030, 1, 1, 12, 0, 0, tzinfo=UTC)
 

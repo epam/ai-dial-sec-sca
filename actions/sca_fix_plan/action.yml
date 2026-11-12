@@ -19,13 +19,35 @@ runs:
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: "3.12"
+    # the GitHub values the commands cannot read themselves: the host and the ref this action runs from
+    - name: Resolve the run context
+      id: context
+      shell: bash
+      env:
+        SERVER_URL: ${{ github.server_url }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" context
     - name: Plan the fixes
       shell: bash
       env:
-        ACTION_PATH: ${{ github.action_path }}
         REPORTS: ${{ inputs.reports }}
         CONFIG: ${{ inputs.config }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
+        SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
+        # the engine package sca, from the src layout of the action checkout
+        PYTHONPATH: ${{ github.action_path }}/../../src
       run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -f "$OUTPUT_DIR/outputs.json" "$OUTPUT_DIR/annotations.json" "$OUTPUT_DIR/summary.md"
         mapfile -t reports < <(printf '%s\n' "$REPORTS" | sed '/^[[:space:]]*$/d')
-        PYTHONPATH="$ACTION_PATH:$ACTION_PATH/../sca_rules" python -m sca_fix_plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
+        python -P -m sca plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
+    # shows what the command wrote into its output directory: step outputs, job summary, annotations
+    - name: Report the results
+      id: report
+      if: always()
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        SCA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" render "$OUTPUT_DIR"

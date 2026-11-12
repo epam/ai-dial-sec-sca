@@ -1,5 +1,5 @@
 import pytest
-from sca_fix_plan import Config, ConfigError, parse_config
+from sca.plan import Config, ConfigError, parse_config
 
 
 def test_defaults() -> None:

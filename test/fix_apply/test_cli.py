@@ -2,10 +2,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-import fix_apply
+from sca.fix import fix_apply
 import pytest
 from builders import item, line
-from texts import summary
+from sca.fix.texts import summary
 
 
 def result(**fields: Any) -> dict[str, Any]:

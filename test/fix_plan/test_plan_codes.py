@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from cases import CASES
 from helpers import DEV_SOURCE, development, plan, record, report, target, version
-from sca_fix_plan import Config, build_plan, merge_reports, parse_config, plan_codes
+from sca.plan import Config, build_plan, merge_reports, parse_config, plan_codes
 from test_plan_cases import OPT_IN, run
 
 # N9.2: the codes of the plan side, copied from the spec
