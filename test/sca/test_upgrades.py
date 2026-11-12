@@ -1,7 +1,7 @@
 """``upgrades`` of the vulnerability records of report.json versions."""
 
 from test_summary import finding, report, target
-from vulns import build_versions
+from sca.merge.vulns import build_versions
 
 
 def upgrades(findings, targets=None, package_sets=None, version="1.0.0", cls="lang"):

@@ -12,9 +12,9 @@ These actions are called by the `sca_scheduled.yml` workflow of [epam/ai-dial-ci
 - `actions/_install_trivy`: installs Trivy from the GitHub release of `version` (same rules and the same optional `trivy-sha256` as in `sca_query_osv`); `sca_query_osv` repeats its steps and shares its `install.sh`, because a composite action cannot use a sibling action by a relative path.
 - `actions/generate_gradle_lockfiles`: generates Gradle lockfiles on the fly so Trivy can resolve Gradle dependencies (repository files are not modified).
 - `actions/sca_fix_plan` and `actions/sca_fix_apply`: the fixer, see Fixer below.
-- `actions/sca_rules`: the rules the engine and the fixer share (package key, version order, upgrade target, fixed-in-development state of a record), see Shared rules below.
+- `src/sca/rules`: the rules the engine and the fixer share (package key, version order, upgrade target, fixed-in-development state of a record), see Shared rules below.
 
-The actions share the code in `actions/_sca_lib` (it is imported through `PYTHONPATH=${{ github.action_path }}/..`, so the `actions/` layout must stay as it is) and the package in `actions/sca_rules` (the `PYTHONPATH` of each action that uses it lists `actions/sca_rules` too). A caller that runs the scripts outside the actions MUST put `actions/sca_rules` itself on `PYTHONPATH`, not only `actions/`: there `actions/sca_rules` is an empty namespace package, and the scripts stop with a message saying so.
+The code is one Python distribution, `ai-dial-sec-sca` (`pyproject.toml`, import package `src/sca`, no runtime dependencies, Python 3.12): `sca.lib` (run context, output files), `sca.targets`, `sca.osv`, `sca.merge`, `sca.plan`, `sca.rules`, `sca.fix`. `pip install .` gives the `sca` command with the subcommands `targets`, `osv`, `merge` and `plan`; the composite actions do not install it, they run `python -m sca <command>` with `PYTHONPATH` set to `src`, so the layout of the repository must stay as it is. The GitHub side is a standard-library script run by path, `actions/_github/github_adapter.py`; it is not part of the package, which prints no platform syntax.
 
 ## Inputs
 
@@ -84,7 +84,7 @@ A script writes the following into its output directory, also when it fails:
 | `annotations.json` | The messages for the CI UI: a list of `level` (`notice`, `warning`, `error`), `message`, `title` and `target`. |
 | `summary.md` | The job summary of `sca_merge_results`. |
 
-The last step of each action (`python -m _sca_lib.github`) turns these files into GitHub: the step outputs (`GITHUB_OUTPUT`), the job summary (`GITHUB_STEP_SUMMARY`, cut to its 1 MiB limit) and one workflow command per annotation. It is the only code that knows these syntaxes, and it does not change the exit status of the action.
+The last step of each action (`actions/_github/github_adapter.py render`) turns these files into GitHub: the step outputs (`GITHUB_OUTPUT`), the job summary (`GITHUB_STEP_SUMMARY`, cut to its 1 MiB limit) and one workflow command per annotation. It is the only code that knows these syntaxes, and it does not change the exit status of the action.
 
 The files are described by the JSON Schemas in `schema/` (`targets`, `report`, `outputs`, `annotations`); the tests validate what the engine writes against them.
 
@@ -114,11 +114,10 @@ The fixer turns the schema 4 reports into pull requests that bump the vulnerable
 - `actions/sca_fix_plan` (input `reports`: the `report.json` files of one repo; `config`: the policy as JSON; `output-dir`): plans which records of which versions become fix items, with the target version and the method (`dependabot`, `npm-override`, opt-in `docker-tag`; anything else is `manual` with a reason code). It writes `fix-plan.json` (schema 2) and `fix-plan.md`. A pure function of the reports and the configuration: no network, no git.
 - `actions/sca_fix_apply` (input `command`: `apply`, `publish`, `node` or `summary`): `apply` runs the automated items of one plan line on a checked-out branch (Dependabot CLI jobs, the npm override step, the base image bump) and proves each change with a rescan by the same detector as the scan (Trivy and OSV from one database state, records built by `records_of` of the engine); `publish` pushes the fix branch the fixer owns and opens or updates one pull request; `node` reads the node version of a branch; `summary` writes the job summary of all lines.
 
-`sca_fix_plan` is also an installable package (`actions/sca_fix_plan`, standard library only, no side effects on import, `__version__` 1.0.0). It needs the package `sca_rules` of the same tag; install both (the planner fails at import with a message when `sca_rules` is missing):
+The planner is a module of the package, `sca.plan` (standard library only, no side effects on import); `sca plan` runs it. Install the package from a tag:
 
 ```sh
-pip install "git+https://github.com/epam/ai-dial-sec-sca@v0.8.1#subdirectory=actions/sca_rules"
-pip install "git+https://github.com/epam/ai-dial-sec-sca@v0.8.1#subdirectory=actions/sca_fix_plan"
+pip install "git+https://github.com/epam/ai-dial-sec-sca@<tag>"
 ```
 
 Public API:
@@ -129,7 +128,7 @@ Public API:
 
 ### Shared rules
 
-`actions/sca_rules` (standard library only, `__version__` 0.8.1, the engine release) holds the one implementation of: `norm` (the package key), `version_key`, `compare`, `major` and the rest of the version order, `choose_target` and `upgrade_target` (the target rule above), and `Development` (the state of a record against the development version: `fixed`, `removed`, `open` or `incomplete`). The engine, the planner and the applier import it; `sca_fix_plan` re-exports `upgrade_target`.
+`sca.rules` (`src/sca/rules`, standard library only) holds the one implementation of: `norm` (the package key), `version_key`, `compare`, `major` and the rest of the version order, `choose_target` and `upgrade_target` (the target rule above), and `Development` (the state of a record against the development version: `fixed`, `removed`, `open` or `incomplete`). The engine, the planner and the applier import it; `sca.plan` re-exports `upgrade_target`.
 
 ### result.json
 
@@ -175,7 +174,7 @@ Fields added to the end of the objects of `versions[]` (the new fields of `findi
 - `title` on `vulns[]`: the Trivy `Title` of the record's findings, else the OSV `summary` (never its details), whitespace collapsed to single spaces; the first non-empty, Trivy first; `null` when there is none.
 
 - `upgrades` on `vulns[]` (v0.8.1): per value of the record's `installed`, in version order (versions that cannot be parsed last, in string order), `{installed, target, reason}`. `target` is the version to upgrade to by the rule of the fix plan (`sca_rules.upgrade_target`, `allow_major` none, over all records of the same package and class in the same version that contain this installed version; the versions the development versions run are the evidence, and only when development fixes every one of those records). It is the package-wide fact: the target of a plan or pull request can differ from it (filters, accepted records, `allow-major`, several development versions); `reason` is `null` exactly when `target` is set, else `needs_major` (major: the first component, the first two for `0.x`, none for a calendar version whose first component has four digits or more), `no_fixed_version`, `version_unparsable` or, for an `os` record with a fixed version, `image_rebuild`. Within one version, package and installed version: with development evidence every record gets the group's target (or reason); without it a record with no fixed version above the installed version has `no_fixed_version`, and the others share the group's target or reason.
-- `dev_state` on `vulns[]` (v0.8.1): what the development versions say about the record: `fixed`, `removed`, `open` or `incomplete` (development was not scanned completely in every kind of target the record was found in), the same state `sca_fix_plan.classify` gives; `null` on the records of a development version and when the run has no development version. Several development versions count as their union.
+- `dev_state` on `vulns[]` (v0.8.1): what the development versions say about the record: `fixed`, `removed`, `open` or `incomplete` (development was not scanned completely in every kind of target the record was found in), the same state `sca.plan.classify` gives; `null` on the records of a development version and when the run has no development version. Several development versions count as their union.
 
 ### Fields added in v0.8.0
 

@@ -1,22 +1,6 @@
-"""pytest configuration of the SCA action tests."""
+"""pytest configuration of the SCA tests."""
 
-import sys
-from pathlib import Path
-
-ACTIONS = Path(__file__).resolve().parents[2] / "actions"
-
-# the actions import the shared package as ``_sca_lib``, which their action.yml put
-# on PYTHONPATH (the ``actions`` directory)
-sys.path.insert(0, str(ACTIONS))
-# the shared rules package, on PYTHONPATH of the actions that use it
-sys.path.insert(0, str(ACTIONS / "sca_rules"))
-# the action scripts import their sibling modules as they do when they run from
-# their action directory
-sys.path.insert(0, str(ACTIONS / "sca_query_osv"))
-sys.path.insert(0, str(ACTIONS / "sca_resolve_targets"))
-sys.path.insert(0, str(ACTIONS / "sca_merge_results"))
-
-import pytest  # noqa: E402
+import pytest
 
 RUN_ENV = {
     "SCA_RUN_HOST": "github.com",

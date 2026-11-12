@@ -84,7 +84,7 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
         # the scan engine the detector reuses (normalize, vulns, query_osv), its shared package _sca_lib and the rules package sca_rules
-        PYTHONPATH: ${{ github.action_path }}/..:${{ github.action_path }}/../sca_rules:${{ github.action_path }}/../sca_merge_results:${{ github.action_path }}/../sca_query_osv
+        PYTHONPATH: ${{ github.action_path }}/../../src
         COMMAND: ${{ inputs.command }}
         PLAN: ${{ inputs.plan }}
         BRANCH: ${{ inputs.branch }}
@@ -128,4 +128,4 @@ runs:
             args+=(--results-dir "$RESULTS_DIR" --missing-branches "$MISSING_BRANCHES")
             ;;
         esac
-        python "$ACTION_PATH/fix_apply.py" "${args[@]}"
+        python -m sca.fix.fix_apply "${args[@]}"

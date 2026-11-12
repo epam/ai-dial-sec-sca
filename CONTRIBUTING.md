@@ -25,7 +25,7 @@ To run the checks manually: `pre-commit run --all-files`.
 The tests need Python 3.12 and no network access:
 
 ```bash
-python -m pip install pytest jsonschema
+python -m pip install -e . pytest jsonschema
 python -m pytest test/sca test/fix_plan test/fix_apply
 ```
 

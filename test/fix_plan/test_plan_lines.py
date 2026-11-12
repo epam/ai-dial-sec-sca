@@ -18,7 +18,7 @@ from helpers import (
     target,
     version,
 )
-from sca_fix_plan import (
+from sca.plan import (
     Config,
     ConfigError,
     build_plan,
@@ -26,7 +26,7 @@ from sca_fix_plan import (
     merge_reports,
     parse_config,
 )
-from sca_rules import norm
+from sca.rules import norm
 
 
 def lines_of(result: dict[str, Any]) -> list[tuple[str, str, str]]:

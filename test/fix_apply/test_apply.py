@@ -4,10 +4,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from apply import Tools, process_line
+from sca.fix.apply import Tools, process_line
 from builders import file, finding, item, line, outcome, tools
-from dependabot import TIMEOUT, JobError, Outcome
-from scan import BuildError, Finding, ScanError
+from sca.fix.dependabot import TIMEOUT, JobError, Outcome
+from sca.fix.scan import BuildError, Finding, ScanError
 
 
 def tree_with(tmp_path: Path, **files: str) -> Path:

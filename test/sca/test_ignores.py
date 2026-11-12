@@ -2,7 +2,7 @@
 
 import json
 
-from ignores import add_ignores, parse_line
+from sca.merge.ignores import add_ignores, parse_line
 from test_merge_results import Run, target, trivy_native
 
 TODAY = "2026-10-14"

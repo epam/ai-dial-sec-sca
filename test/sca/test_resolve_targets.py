@@ -1,4 +1,4 @@
-"""Tests for sca_resolve_targets/resolve_targets.py (fake transport, no network)."""
+"""Tests for sca/targets/resolve_targets.py (fake transport, no network)."""
 
 import argparse
 import json
@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import resolve_targets as rt
-from _sca_lib.context import UsageError, read_run_context
+from sca.targets import resolve_targets as rt
+from sca.lib.context import UsageError, read_run_context
 
 REPOSITORY = "example/app"
 SHA = "a" * 40

@@ -12,7 +12,7 @@ from helpers import (
     target,
     version,
 )
-from sca_fix_plan import (
+from sca.plan import (
     Config,
     ReportError,
     build_plan,

@@ -57,8 +57,7 @@ runs:
       env:
         SERVER_URL: ${{ github.server_url }}
         ACTION_PATH: ${{ github.action_path }}
-        PYTHONPATH: ${{ github.action_path }}/..
-      run: python -m _sca_lib.github context
+      run: python "$ACTION_PATH/../_github/github_adapter.py" context
     - name: Resolve targets
       shell: bash
       env:
@@ -83,9 +82,9 @@ runs:
         SCA_RUN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
         # the shared code of the SCA actions: actions/_sca_lib, a sibling of this directory
-        PYTHONPATH: ${{ github.action_path }}/..
+        PYTHONPATH: ${{ github.action_path }}/../../src
       run: |
-        python "$ACTION_PATH/resolve_targets.py" \
+        python -m sca targets \
           --repository "$REPOSITORY" \
           --registry "$REGISTRY" \
           --images "$IMAGES" \
@@ -102,5 +101,5 @@ runs:
       env:
         OUTPUT_DIR: ${{ inputs.output-dir }}
         SCA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        PYTHONPATH: ${{ github.action_path }}/..
-      run: python -m _sca_lib.github render "$OUTPUT_DIR"
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" render "$OUTPUT_DIR"

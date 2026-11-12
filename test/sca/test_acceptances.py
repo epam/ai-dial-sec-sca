@@ -3,9 +3,9 @@
 import json
 from pathlib import Path
 
-import ignores
+from sca.merge import ignores
 import pytest
-import vulns
+from sca.merge import vulns
 from golden_case import GOLDEN, as_before, merged
 
 SRC, REL, IMG = "source-development", "source-1.0.0", "image-dev"

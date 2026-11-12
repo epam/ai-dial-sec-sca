@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 from helpers import development, report, target, version
-from sca_fix_plan import ReportError, merge_reports
+from sca.plan import ReportError, merge_reports
 
 
 def test_merge_by_ref() -> None:

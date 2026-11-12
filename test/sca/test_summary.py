@@ -3,8 +3,8 @@
 import re
 
 import pytest
-from summary import build_summary, target_label
-from vulns import build_versions, versions_of
+from sca.merge.summary import build_summary, target_label
+from sca.merge.vulns import build_versions, versions_of
 
 
 def target(

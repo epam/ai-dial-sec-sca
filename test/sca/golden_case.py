@@ -6,8 +6,8 @@ so a change of the engine shows what it did to a report that does not use it.
 import json
 from pathlib import Path
 
-from _sca_lib import dump_json
-from merge_results import run_merge
+from sca.lib import dump_json
+from sca.merge.merge_results import run_merge
 from test_merge_results import DB, osv_native, target
 
 NOW = "2026-10-14T00:00:00Z"

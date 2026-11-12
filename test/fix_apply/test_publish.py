@@ -2,9 +2,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import publish as publish_module
+from sca.fix import publish as publish_module
 import pytest
-from publish import PublishError, baseline_ci, publish
+from sca.fix.publish import PublishError, baseline_ci, publish
 
 
 def git(cwd: Path, *args: str) -> str:

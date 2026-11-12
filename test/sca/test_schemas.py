@@ -9,10 +9,10 @@ from typing import Any
 
 import jsonschema
 import pytest
-import query_osv
-import resolve_targets as rt
+from sca.osv import query_osv
+from sca.targets import resolve_targets as rt
 from golden_case import merged, merged_scan_tag
-from merge_results import main as merge_main
+from sca.merge.merge_results import main as merge_main
 from test_merge_results import Run, cli_args, target, trivy_native
 from test_resolve_targets import (
     ENV,

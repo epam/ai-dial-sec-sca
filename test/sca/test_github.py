@@ -1,14 +1,14 @@
-"""The GitHub rendering of an output dir (``_sca_lib.github``) and the output files of
-a command (``_sca_lib.outputs``).
+"""The GitHub rendering of an output dir (``actions/_github``) and the output files of
+a command (``sca.lib.outputs``).
 """
 
 import json
 from pathlib import Path
 
 import pytest
-from _sca_lib import dump_json
-from _sca_lib.context import CommandError, UsageError, read_run_context
-from _sca_lib.github import (
+from sca.lib import dump_json
+from sca.lib.context import CommandError, UsageError, read_run_context
+from github_adapter import (
     STEP_SUMMARY_LIMIT_BYTES,
     command_line,
     context_outputs,
@@ -17,7 +17,7 @@ from _sca_lib.github import (
     render,
     truncate_summary,
 )
-from _sca_lib.outputs import execute, note
+from sca.lib.outputs import execute, note
 
 RUN_ENV = {
     "SCA_RUN_HOST": "github.com",

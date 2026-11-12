@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from builders import file
-from files import Journal, merge_text
+from sca.fix.files import Journal, merge_text
 
 
 def put(tree: Path, name: str, text: str) -> None:

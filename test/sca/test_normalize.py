@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from normalize import (
+from sca.merge.normalize import (
     apply_gradle_graph,
     borrow_source_chains,
     normalize_osv,

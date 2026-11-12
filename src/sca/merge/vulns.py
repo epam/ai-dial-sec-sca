@@ -1,0 +1,510 @@
+"""``versions[]`` of report.json: the vulnerability records of every scanned version.
+
+The findings of both scanners and of all targets of a version merge into one record
+per vulnerability of a package (see ``build_versions``); the counts of the version
+are computed from its records.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from sca.merge.normalize import SEVERITIES, PackageSet
+from sca.rules import (
+    FIXED,
+    Development,
+    VersionError,
+    compare,
+    fixed_versions,
+    norm,
+    upgrade_target,
+    version_key,
+)
+
+Finding = Mapping[str, Any]
+
+COUNT_KEYS = dict(zip(SEVERITIES, ("c", "h", "m", "l", "unknown")))
+# Trivy result type -> OSV ecosystem name
+OSV_ECOSYSTEMS = {
+    **dict.fromkeys(("pip", "pipenv", "poetry", "uv", "python-pkg"), "PyPI"),
+    **dict.fromkeys(("npm", "yarn", "pnpm", "node-pkg"), "npm"),
+    **dict.fromkeys(("jar", "pom", "gradle"), "Maven"),
+    **dict.fromkeys(("gomod", "gobinary"), "Go"),
+    "cargo": "crates.io",
+    "nuget": "NuGet",
+}
+VERSION = re.compile(r"(\d+(?:\.\d+)*)(-.+)?")
+
+
+def version_order(version: str) -> tuple[int, Any]:
+    """development first, then releases from the newest (a release candidate after
+    its final version), then whatever is not a version, alphabetically.
+    """
+    if version == "development":
+        return 0, ()
+    if m := VERSION.fullmatch(version):
+        return 1, (tuple(-int(n) for n in m[1].split(".")), m[2] is not None, m[2])
+    return 2, version
+
+
+def versions_of(report: Mapping[str, Any]) -> list[tuple[str, set[str]]]:
+    """(version, ids of its targets) in display order. The source and the images of
+    one version agree on it: a git tag may carry a ``v`` that a registry tag lacks.
+    A target without a ref (its resolution failed) belongs to no version.
+    """
+    ids: dict[str, set[str]] = {}
+    for t in report["targets"]:
+        if t["ref"]:
+            ids.setdefault(t["ref"].removeprefix("v"), set()).add(t["id"])
+    return sorted(ids.items(), key=lambda item: version_order(item[0]))
+
+
+def is_release(ref: str, default_branch: str | None) -> bool:
+    """A plain semver tag: not the default branch, not ``development``, not a
+    pre-release, and not a ref that does not parse as semver.
+    """
+    if ref == default_branch or ref == "development":
+        return False
+    m = VERSION.fullmatch(ref)
+    return m is not None and m[2] is None
+
+
+KINDS = ("development", "release", "candidate")
+
+
+def version_kind(ref: str, default_branch: str | None) -> str:
+    """``development`` for the default branch or ``development``; ``candidate`` for a
+    semver with a pre-release part (``0.50.0-rc.1``); ``release`` otherwise.
+    """
+    if ref == default_branch or ref == "development":
+        return "development"
+    m = VERSION.fullmatch(ref)
+    if m and m[2] is not None:
+        return "candidate"
+    return "release"
+
+
+def components(findings: Sequence[Finding]) -> list[list[Finding]]:
+    """Findings of one package grouped by intersecting ``names`` (union-find, so the
+    result does not depend on the order); each group keeps the order of its findings.
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for f in findings:
+        for name in f["names"]:
+            parent[find(name)] = find(f["names"][0])
+    groups: dict[str, list[Finding]] = {}
+    for f in findings:
+        groups.setdefault(find(f["names"][0]), []).append(f)
+    return list(groups.values())
+
+
+def fixed_of(f: Finding) -> list[str]:
+    return [x.strip() for x in f["fixed_version"].split(",") if x.strip()]
+
+
+def pkg_of(fs: Sequence[Finding], source_ids: set[str]) -> str:
+    """The package name as a source target spells it, else as the first finding."""
+    return next((f for f in fs if f["target"] in source_ids), fs[0])["pkg"]
+
+
+def ecosystem_of(fs: Sequence[Finding]) -> str | None:
+    """The OSV ecosystem name: the one of an OSV finding, else the mapped Trivy type
+    of a language finding, else None.
+    """
+    if osv := next((f for f in fs if f["scanner"] == "osv"), None):
+        return osv["ecosystem"]
+    if fs[0]["class"] == "lang":
+        return OSV_ECOSYSTEMS.get(fs[0]["ecosystem"])
+    return None
+
+
+def relationship_of(fs: Sequence[Finding]) -> str | None:
+    """``direct`` wins over ``indirect``, then the first known value."""
+    found = [f["relationship"] for f in fs if f["relationship"]]
+    for kind in ("direct", "indirect"):
+        if kind in found:
+            return kind
+    return found[0] if found else None
+
+
+def cvss_of(fs: Sequence[Finding]) -> dict[str, Any] | None:
+    """The CVSS of the first finding that has a score, else of the first that has
+    one at all (a vector without a score comes from OSV)."""
+    found = [f["cvss"] for f in fs if f["cvss"]]
+    scored = [c for c in found if c["score"] is not None]
+    return (scored or found or [None])[0]
+
+
+def record_of(fs: Sequence[Finding], source_ids: set[str]) -> dict[str, Any]:
+    """The vulnerability record of one component of findings (Trivy first, then OSV,
+    each by target and id).
+    """
+    ids = sorted(f["id"] for f in fs)
+    vid = next((i for i in ids if i.startswith("CVE-")), ids[0])
+    names = {n for f in fs for n in f["names"]}
+    # the rating of Trivy wins; OSV rates a vulnerability Trivy does not report
+    rated = [f for f in fs if f["scanner"] == "trivy"] or fs
+    fixed = (x for f in fs for x in fixed_of(f))
+    dates = [f["published"] for f in fs if f["published"]]
+    untils = [f["accepted"]["until"] for f in fs if f.get("accepted")]
+    pkg = pkg_of(fs, source_ids)
+    return {
+        "id": vid,
+        "names": [vid, *sorted(names - {vid})],
+        "pkg": pkg,
+        "class": fs[0]["class"],
+        "severity": min((f["severity"] for f in rated), key=SEVERITIES.index),
+        "fixed": ", ".join(dict.fromkeys(fixed)),
+        "dev": all(f["dev"] for f in fs),
+        "installed": sorted({f["version"] for f in fs}),
+        "where": sorted({f["target"] for f in fs}),
+        "sources": [s for s in ("trivy", "osv") if any(f["scanner"] == s for f in fs)],
+        "published": min(dates, default=None),
+        "modified": max((f["modified"] for f in fs if f["modified"]), default=None),
+        "cvss": cvss_of(fs),
+        "aliases": sorted({a for f in fs for a in f["aliases"]} - names),
+        "ecosystem": ecosystem_of(fs),
+        "relationship": relationship_of(fs),
+        "locations": sorted({loc for f in fs for loc in f["locations"]}),
+        "accepted": {"until": min(untils)} if len(untils) == len(fs) else None,
+        "pkg_key": norm(pkg),
+        "src_pkg": next(
+            (f["src_pkg"] for f in fs if f["scanner"] == "trivy" and f["src_pkg"]), None
+        ),
+        "title": title_of(fs),
+    }
+
+
+def title_of(fs: Sequence[Finding]) -> str | None:
+    """The first non-empty title with whitespace collapsed: Trivy's ``Title`` of the
+    findings, else the ``summary`` of an OSV advisory (never its details).
+    """
+    for f in sorted(fs, key=lambda f: f["scanner"] != "trivy"):
+        text = " ".join((f["title"] if f["scanner"] == "trivy" else f["summary"] or "").split())
+        if text:
+            return text
+    return None
+
+
+def records_of(
+    findings: Sequence[Finding], source_ids: set[str]
+) -> list[dict[str, Any]]:
+    """The records of findings of any targets and scanners: the findings of one
+    package (``class``, normalized name) grouped into components, one record each,
+    sorted by class, package and id.
+    """
+    ordered = sorted(
+        findings,
+        key=lambda f: (
+            f["scanner"] != "trivy",
+            f["target"],
+            f["id"],
+            f["pkg"],
+            f["version"],
+        ),
+    )
+    packages: dict[tuple[str, str], list[Finding]] = {}
+    for f in ordered:
+        packages.setdefault((f["class"], norm(f["pkg"])), []).append(f)
+    records = (
+        record_of(c, source_ids) for fs in packages.values() for c in components(fs)
+    )
+    return sorted(records, key=lambda v: (v["class"], norm(v["pkg"]), v["id"]))
+
+
+def counts_of(vulns: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """Severity counts, ``all`` and ``fixable`` of the records."""
+    return {
+        **{k: sum(v["severity"] == s for v in vulns) for s, k in COUNT_KEYS.items()},
+        "all": len(vulns),
+        "fixable": sum(bool(v["fixed"]) for v in vulns),
+    }
+
+
+def packages_of(
+    ids: set[str],
+    vulns: Sequence[Mapping[str, Any]],
+    keys: Mapping[tuple[str, str], str],
+    package_sets: Mapping[str, PackageSet],
+    ok: set[str],
+    sources: Mapping[tuple[str, str], str],
+) -> list[dict[str, Any]]:
+    """The ``packages`` of one version: per package of ``keys`` the versions installed
+    in its targets and the targets. Trivy packages of ``ok`` targets (vulnerable or
+    not) and the records of the version itself are the sources.
+    """
+    seen: dict[tuple[str, str], tuple[set[str], set[str]]]
+    seen = {k: (set(), set()) for k in keys}
+    for tid in ids & ok:
+        for cls, name, installed in package_sets.get(tid, ()):
+            if (cls, name) in seen:
+                seen[cls, name][0].add(installed)
+                seen[cls, name][1].add(tid)
+    for v in vulns:
+        installed, where = seen[v["class"], norm(v["pkg"])]
+        installed.update(v["installed"])
+        where.update(v["where"])
+    return [
+        {
+            "pkg": keys[k],
+            "class": k[0],
+            "installed": sorted(installed),
+            "where": sorted(where),
+            "pkg_key": k[1],
+            "src_pkg": sources.get(k),
+        }
+        for k, (installed, where) in sorted(seen.items())
+    ]
+
+
+def set_roles(versions: Sequence[dict[str, Any]]) -> None:
+    """``role`` of every version (``versions`` is newest first): ``dev`` for each
+    development version, ``rc`` for each candidate; of the release versions ``rel``
+    for the newest of the newest release line (major.minor) and ``rel-1`` for the
+    newest of the line before it; any other version, and a release whose ref has no
+    major.minor, gets ``None``.
+    """
+    lines: list[tuple[int, ...]] = []
+    for v in versions:
+        role = {"development": "dev", "candidate": "rc"}.get(v["kind"])
+        m = VERSION.fullmatch(v["ref"])
+        if v["kind"] == "release" and m and "." in m[1]:
+            line = tuple(int(n) for n in m[1].split(".")[:2])
+            if line not in lines:
+                lines.append(line)
+                role = ("rel", "rel-1")[len(lines) - 1] if len(lines) <= 2 else None
+        v["role"] = role
+
+
+def upgrade_order(installed: str) -> tuple[bool, Any, str]:
+    """Sort key of an installed version: version order, unparsable versions last in
+    string order.
+    """
+    try:
+        return False, version_key(installed), installed
+    except VersionError:
+        return True, (), installed
+
+
+def development_of(
+    report: Mapping[str, Any], versions: Sequence[Mapping[str, Any]]
+) -> Development | None:
+    """The development data of the run: the union of its development versions (their
+    targets, packages and records), or None when the run has none.
+    """
+    devs = [v for v in versions if v["kind"] == "development"]
+    if not devs:
+        return None
+    ids = {i for v in devs for i in v["targets"]}
+    trivy = {
+        t["id"]: t
+        for t in report["targets"]
+        if t["scanner"] == "trivy" and t["id"] in ids
+    }
+    twins: dict[str, list[str]] = {}
+    for t in report["targets"]:
+        if t["scanner"] != "trivy" and t["id"] in ids:
+            twins.setdefault(t["id"], []).append(t["status"])
+    return Development.of(
+        trivy,
+        twins,
+        [p for v in devs for p in v["packages"]],
+        [r for v in devs for r in v["vulns"]],
+    )
+
+
+def dev_states(
+    version: Mapping[str, Any],
+    trivy: Mapping[str, Mapping[str, Any]],
+    development: Development | None,
+) -> dict[int, str | None]:
+    """The development state (``fixed``, ``removed``, ``open``, ``incomplete``) of each
+    record of ``version`` (by ``id()``), by the rule of ``sca_rules.Development``;
+    None for the records of a development version and when the run has none.
+    """
+    return {
+        id(r): development.state(r, trivy)[0]
+        if development and version["kind"] != "development"
+        else None
+        for r in version["vulns"]
+    }
+
+
+def has_fix_above(installed: str, record: Mapping[str, Any]) -> bool:
+    """True when ``record`` has a fixed version above ``installed``; a version that
+    cannot be compared counts as yes (the group's target gives the reason).
+    """
+    try:
+        return any(compare(f, installed) > 0 for f in fixed_versions(record))
+    except VersionError:
+        return True
+
+
+def group_upgrades(
+    same: Sequence[Mapping[str, Any]],
+    dev: Sequence[str],
+    states: Mapping[int, str | None],
+) -> dict[int, list[dict[str, Any]]]:
+    """``upgrades`` of the records of one package and class in one version (by
+    ``id()``). ``dev`` are the versions development runs. The target and its reason
+    are computed once per installed version, for the records that contain it.
+    """
+    out: dict[int, list[dict[str, Any]]] = {id(r): [] for r in same}
+    for installed in sorted({i for r in same for i in r["installed"]}, key=upgrade_order):
+        here = [r for r in same if installed in r["installed"]]
+        evidence = bool(dev) and all(states[id(r)] == FIXED for r in here)
+        target, reason = None, None
+        if here[0]["class"] != "os":
+            target, _, reason = upgrade_target(
+                installed, here, dev if evidence else ()
+            )
+        for record in here:
+            entry = {"installed": installed, "target": target, "reason": reason}
+            if record["class"] == "os":
+                entry["reason"] = (
+                    "image_rebuild" if fixed_versions(record) else "no_fixed_version"
+                )
+            elif not evidence and not has_fix_above(installed, record):
+                entry["target"], entry["reason"] = None, "no_fixed_version"
+            out[id(record)].append(entry)
+    return out
+
+
+def set_rule_fields(
+    versions: Sequence[dict[str, Any]], report: Mapping[str, Any]
+) -> None:
+    """``upgrades`` and ``dev_state`` of every record. ``upgrades``: per installed
+    version of the record ``target``, the version to upgrade to by the rule of the fix
+    plan (``sca_rules.upgrade_target`` over the records of the same package and class
+    in the same version that contain the installed version), and ``reason`` (null
+    exactly when there is a target): ``needs_major``, ``no_fixed_version``,
+    ``version_unparsable``, or ``image_rebuild`` (an ``os`` record with a fixed
+    version). The versions development runs are the evidence for the target only when
+    development fixes every record that contains the installed version; with that
+    evidence every record of the group gets the group's target. Without it a record
+    with no fixed version above the installed version has ``no_fixed_version`` for it,
+    whatever the other records give. ``dev_state``: what the development versions say
+    about the record (see ``dev_states``).
+    """
+    installed: dict[tuple[str, str], set[str]] = {}
+    for version in versions:
+        if version["kind"] == "development":
+            for p in version["packages"]:
+                installed.setdefault((p["class"], p["pkg_key"]), set()).update(
+                    p["installed"]
+                )
+    development = development_of(report, versions)
+    for version in versions:
+        trivy = {
+            t["id"]: t
+            for t in report["targets"]
+            if t["scanner"] == "trivy" and t["id"] in version["targets"]
+        }
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for v in version["vulns"]:
+            groups.setdefault((v["class"], v["pkg_key"]), []).append(v)
+        states = dev_states(version, trivy, development)
+        for (cls, key), same in groups.items():
+            runs = sorted(installed.get((cls, key), ()))
+            upgrades = group_upgrades(same, runs, states)
+            for record in same:
+                record["upgrades"] = upgrades[id(record)]
+                record["dev_state"] = states[id(record)]
+
+
+def build_versions(
+    report: Mapping[str, Any],
+    package_sets: Mapping[str, PackageSet],
+    version_kinds: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """One record per version of ``versions_of``, in that order: ``status`` (failed
+    when a Trivy or an OSV scan of a target failed; a ``not_applicable`` target does
+    not fail it), ``kind``, ``latest`` (the newest ``ok`` release), ``targets``, the
+    ``vulns`` merged over the targets and scanners, and their ``counts``, then the
+    ``packages`` (see ``packages_of``) of every package that has a record in any
+    version. A failed version keeps what its ``ok`` targets found. ``version_kinds``
+    (ref -> kind, from the producer) overrides the kind that ``version_kind`` derives
+    from the spelling of the ref and decides ``latest`` for the versions it names; its
+    keys are the refs of the targets as given (before the ``v`` strip of ``versions_of``);
+    a ref without a target is ignored, a kind that is not one of ``KINDS`` raises
+    ``ValueError``.
+    """
+    version_kinds = version_kinds or {}
+    if bad := {r: k for r, k in version_kinds.items() if k not in KINDS}:
+        raise ValueError(f"version_kinds: unknown kind {bad}; expected one of {KINDS}")
+    default_branch = report["default_branch"]
+    source_ids = {t["id"] for t in report["targets"] if t["kind"] == "fs"}
+    result = []
+    named: set[str] = set()  # the versions whose kind the map gave
+    for ref, ids in versions_of(report):
+        given = sorted(
+            {t["ref"] for t in report["targets"] if t["id"] in ids} & version_kinds.keys()
+        )
+        if len({version_kinds[g] for g in given}) > 1:
+            raise ValueError(
+                f"version_kinds: version {ref} has refs of different kinds: "
+                + ", ".join(f"{g} is {version_kinds[g]}" for g in given)
+            )
+        if given:
+            named.add(ref)
+        failed = any(
+            t["status"] == "failed" for t in report["targets"] if t["id"] in ids
+        )
+        vulns = records_of(
+            [f for f in report["findings"] if f["target"] in ids], source_ids
+        )
+        result.append(
+            {
+                "ref": ref,
+                "kind": version_kinds[given[0]] if given else version_kind(ref, default_branch),
+                "latest": False,  # resolved below, once every status is known
+                "status": "failed" if failed else "ok",
+                "targets": sorted(ids),
+                "counts": counts_of(vulns),
+                "vulns": vulns,
+            }
+        )
+    # the package spelling of the first version that has a record for it
+    keys: dict[tuple[str, str], str] = {}
+    for version in result:
+        for v in version["vulns"]:
+            keys.setdefault((v["class"], norm(v["pkg"])), v["pkg"])
+    ok = {
+        t["id"]
+        for t in report["targets"]
+        if t["scanner"] == "trivy" and t["status"] == "ok"
+    }
+    # the source package of an OS package, as the first version with a record states it
+    sources: dict[tuple[str, str], str] = {}
+    for version in result:
+        for v in version["vulns"]:
+            if v["src_pkg"]:
+                sources.setdefault((v["class"], v["pkg_key"]), v["src_pkg"])
+    for version in result:
+        version["packages"] = packages_of(
+            set(version["targets"]), version["vulns"], keys, package_sets, ok, sources
+        )
+    set_roles(result)
+    set_rule_fields(result, report)
+    ok_releases = (
+        v
+        for v in result
+        if v["status"] == "ok"
+        and (
+            v["kind"] == "release"
+            if v["ref"] in named
+            else is_release(v["ref"], default_branch)
+        )
+    )
+    if latest := next(ok_releases, None):
+        latest["latest"] = True
+    return result

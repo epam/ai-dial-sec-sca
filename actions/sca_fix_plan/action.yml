@@ -26,8 +26,7 @@ runs:
       env:
         SERVER_URL: ${{ github.server_url }}
         ACTION_PATH: ${{ github.action_path }}
-        PYTHONPATH: ${{ github.action_path }}/..
-      run: python -m _sca_lib.github context
+      run: python "$ACTION_PATH/../_github/github_adapter.py" context
     - name: Plan the fixes
       shell: bash
       env:
@@ -36,9 +35,10 @@ runs:
         CONFIG: ${{ inputs.config }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
         SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
+        PYTHONPATH: ${{ github.action_path }}/../../src
       run: |
         mapfile -t reports < <(printf '%s\n' "$REPORTS" | sed '/^[[:space:]]*$/d')
-        PYTHONPATH="$ACTION_PATH:$ACTION_PATH/..:$ACTION_PATH/../sca_rules" python -m sca_fix_plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
+        python -m sca plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
     # shows what the command wrote into its output directory: step outputs, job summary, annotations
     - name: Report the results
       id: report
@@ -47,5 +47,5 @@ runs:
       env:
         OUTPUT_DIR: ${{ inputs.output-dir }}
         SCA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        PYTHONPATH: ${{ github.action_path }}/..
-      run: python -m _sca_lib.github render "$OUTPUT_DIR"
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" render "$OUTPUT_DIR"

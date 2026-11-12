@@ -88,15 +88,14 @@ runs:
       env:
         SERVER_URL: ${{ github.server_url }}
         ACTION_PATH: ${{ github.action_path }}
-        PYTHONPATH: ${{ github.action_path }}/..
-      run: python -m _sca_lib.github context
+      run: python "$ACTION_PATH/../_github/github_adapter.py" context
     - name: Query OSV
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
         SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
         # the shared code of the SCA actions: actions/_sca_lib, a sibling of this directory
-        PYTHONPATH: ${{ github.action_path }}/..
+        PYTHONPATH: ${{ github.action_path }}/../../src
         TARGETS_FILE: ${{ inputs.targets-file }}
         PARTS_DIR: ${{ inputs.parts-dir }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
@@ -110,7 +109,7 @@ runs:
         if [ -n "$OFFLINE_DB_DIR" ]; then
           args+=(--offline-db-dir "$OFFLINE_DB_DIR")
         fi
-        python "$ACTION_PATH/query_osv.py" "${args[@]}"
+        python -m sca osv "${args[@]}"
     # shows what the command wrote into its output directory: step outputs, job summary, annotations
     - name: Report the results
       id: report
@@ -119,5 +118,5 @@ runs:
       env:
         OUTPUT_DIR: ${{ inputs.output-dir }}
         SCA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        PYTHONPATH: ${{ github.action_path }}/..
-      run: python -m _sca_lib.github render "$OUTPUT_DIR"
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" render "$OUTPUT_DIR"

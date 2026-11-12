@@ -1,9 +1,9 @@
 """versions[] of report.json: statuses, vulnerability records and counts."""
 
 import pytest
-from sca_rules import norm
+from sca.rules import norm
 from test_summary import finding, report, sample, target, two_versions
-from vulns import (
+from sca.merge.vulns import (
     build_versions,
     components,
     is_release,

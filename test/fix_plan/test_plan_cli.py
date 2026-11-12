@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 from helpers import development, record, report, version
-from sca_fix_plan import cli as fix_plan
+from sca.plan import cli as fix_plan
 
 
 def write_reports(tmp_path: Path) -> list[str]:

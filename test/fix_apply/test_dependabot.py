@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 from builders import item
-from dependabot import (
+from sca.fix.dependabot import (
     JobError,
     docker_job,
     job_directories,

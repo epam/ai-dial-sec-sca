@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from merge_results import count_packages, main, run_merge
+from sca.merge.merge_results import count_packages, main, run_merge
 
 DB = {"vulnerability_db_updated_at": "2026-10-13T06:41:11Z", "java_db_updated_at": None}
 

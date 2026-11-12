@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sca_fix_plan import Config, build_plan, merge_reports
+from sca.plan import Config, build_plan, merge_reports
 
 DEV_SOURCE = "source-development"
 
