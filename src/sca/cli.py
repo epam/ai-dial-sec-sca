@@ -10,6 +10,8 @@ from importlib import import_module
 
 COMMANDS = {
     "targets": ("sca.targets.resolve_targets", "resolve the scan targets (targets.json)"),
+    "db": ("sca.trivy.db", "download the Trivy databases (db-info)"),
+    "scan": ("sca.trivy.scan", "scan one target with Trivy (the Trivy parts)"),
     "osv": ("sca.osv.query_osv", "query OSV for the packages Trivy found"),
     "merge": ("sca.merge.merge_results", "merge the scan parts into report.json"),
     "plan": ("sca.plan.cli", "plan the fixes from report.json files"),

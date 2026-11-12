@@ -1,0 +1,129 @@
+name: Download the Trivy databases
+description: Download the Trivy vulnerability and Java databases into a directory with Trivy installed by sca tools install (pinned, sha256 verified), and describe the snapshot (db-info)
+
+inputs:
+  cache-dir:
+    description: Directory the databases are downloaded into (the Trivy cache dir the scans of the run use); the caller hands it over to them
+    default: ${{ runner.temp }}/trivy-cache
+  trivy-db-repository:
+    description: Trivy vulnerability DB repositories (comma-separated, tried in order); empty means the engine default
+    default: ""
+  trivy-java-db-repository:
+    description: Trivy Java DB repositories (comma-separated, tried in order); empty means the engine default
+    default: ""
+  trivy-version:
+    description: Trivy version to install (release tag, e.g. v0.75.0); empty means the version pinned in the engine
+    default: ""
+  trivy-sha256:
+    description: sha256 of the Trivy release archive for this runner's architecture; needed only for a trivy-version without a pinned value in the engine
+    default: ""
+
+outputs:
+  db-info:
+    description: 'JSON object {"vulnerability_db_updated_at": ..., "java_db_updated_at": ...} describing the snapshot'
+    value: ${{ steps.report.outputs.db-info }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.12"
+    # A composite action cannot use a sibling action by a relative path (it resolves in the workspace of the caller),
+    # so the commands of the sca_tools action are run directly. Their own output directories are under runner.temp
+    - name: Resolve the tools cache key
+      id: tools-key
+      shell: bash
+      env:
+        # the engine package sca, from the src layout of the action checkout
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        TRIVY_VERSION: ${{ inputs.trivy-version }}
+        TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        TOOLS_DIR: ${{ runner.temp }}/sca-tools
+        OUT: ${{ runner.temp }}/sca-tools-key-out
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -rf "$OUT"
+        args=(--tools trivy --dir "$TOOLS_DIR" --output-dir "$OUT")
+        if [ -n "$TRIVY_VERSION" ]; then
+          args+=(--trivy-version "$TRIVY_VERSION")
+        fi
+        if [ -n "$TRIVY_SHA256" ]; then
+          args+=(--trivy-sha256 "$TRIVY_SHA256")
+        fi
+        rc=0
+        python -P -m sca tools key "${args[@]}" || rc=$?
+        python "$ACTION_PATH/../_github/github_adapter.py" render "$OUT"
+        exit $rc
+    # The cache holds only the downloads (never a binary, never on PATH): they are verified again on every run and the
+    # binaries are rebuilt from them. The scan jobs of a run only restore this cache (sca_scan), this action saves it
+    - name: Cache the tools
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.tools-key.outputs.downloads }}
+        key: ${{ steps.tools-key.outputs.key }}
+    - name: Install Trivy
+      id: install
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        TRIVY_VERSION: ${{ inputs.trivy-version }}
+        TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        TOOLS_DIR: ${{ runner.temp }}/sca-tools
+        OUT: ${{ runner.temp }}/sca-tools-out
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        rm -rf "$OUT"
+        args=(--tools trivy --dir "$TOOLS_DIR" --output-dir "$OUT")
+        if [ -n "$TRIVY_VERSION" ]; then
+          args+=(--trivy-version "$TRIVY_VERSION")
+        fi
+        if [ -n "$TRIVY_SHA256" ]; then
+          args+=(--trivy-sha256 "$TRIVY_SHA256")
+        fi
+        rc=0
+        python -P -m sca tools install "${args[@]}" || rc=$?
+        python "$ACTION_PATH/../_github/github_adapter.py" render "$OUT"
+        exit $rc
+    # only the bin directory, the binaries just placed from the verified downloads, goes on PATH
+    - name: Add the tools to PATH
+      shell: bash
+      env:
+        BIN_DIR: ${{ steps.install.outputs.dir }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" path "$BIN_DIR"
+    # the GitHub values the commands cannot read themselves: the host and the ref this action runs from
+    - name: Resolve the run context
+      id: context
+      shell: bash
+      env:
+        SERVER_URL: ${{ github.server_url }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" context
+    - name: Download the Trivy databases
+      shell: bash
+      env:
+        SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
+        # the engine package sca, from the src layout of the action checkout
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        CACHE_DIR: ${{ inputs.cache-dir }}
+        # empty: the command uses its default
+        TRIVY_DB_REPOSITORY: ${{ inputs.trivy-db-repository }}
+        TRIVY_JAVA_DB_REPOSITORY: ${{ inputs.trivy-java-db-repository }}
+        OUTPUT_DIR: ${{ runner.temp }}/sca-db-out
+      run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -rf "$OUTPUT_DIR"
+        python -P -m sca db --cache-dir "$CACHE_DIR" --output-dir "$OUTPUT_DIR"
+    # shows what the command wrote into its output directory: step outputs, job summary, annotations
+    - name: Report the results
+      id: report
+      if: always()
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ runner.temp }}/sca-db-out
+        SCA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" render "$OUTPUT_DIR"

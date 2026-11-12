@@ -5,15 +5,25 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 
 class CommandError(Exception):
-    """A command that cannot go on: ``code`` is its exit code (1 error, 2 usage)."""
+    """A command that cannot go on: ``code`` is its exit code (1 error, 2 usage);
+    ``outputs`` are the values it still leaves.
+    """
 
-    def __init__(self, message: str, code: int = 1, title: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        code: int = 1,
+        title: str | None = None,
+        outputs: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.title = title
+        self.outputs = outputs or {}
 
 
 class UsageError(CommandError):

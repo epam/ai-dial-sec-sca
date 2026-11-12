@@ -12,8 +12,8 @@ inputs:
     description: Directory to write the OSV parts into (osv/<id>.json and osv/<id>.status.json of every OSV target)
     required: true
   trivy-version:
-    description: Trivy version to use for converting the Trivy results to a BOM (release tag, e.g. v0.75.0)
-    required: true
+    description: Trivy version to use for converting the Trivy results to a BOM (release tag, e.g. v0.75.0); empty means the version pinned in the engine
+    default: ""
   trivy-sha256:
     description: sha256 of the Trivy release archive for this runner's architecture; needed only for a trivy-version without a pinned value in the engine
     default: ""
@@ -46,7 +46,9 @@ runs:
         # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
         rm -rf "$OUT"
         args=(--tools trivy,osv-scanner --dir "$TOOLS_DIR" --output-dir "$OUT")
-        args+=(--trivy-version "$TRIVY_VERSION")
+        if [ -n "$TRIVY_VERSION" ]; then
+          args+=(--trivy-version "$TRIVY_VERSION")
+        fi
         if [ -n "$TRIVY_SHA256" ]; then
           args+=(--trivy-sha256 "$TRIVY_SHA256")
         fi
@@ -75,7 +77,9 @@ runs:
       run: |
         rm -rf "$OUT"
         args=(--tools trivy,osv-scanner --dir "$TOOLS_DIR" --output-dir "$OUT")
-        args+=(--trivy-version "$TRIVY_VERSION")
+        if [ -n "$TRIVY_VERSION" ]; then
+          args+=(--trivy-version "$TRIVY_VERSION")
+        fi
         if [ -n "$TRIVY_SHA256" ]; then
           args+=(--trivy-sha256 "$TRIVY_SHA256")
         fi

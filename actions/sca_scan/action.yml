@@ -1,0 +1,180 @@
+name: Scan one SCA target with Trivy
+description: Scan one target of targets.json (a checked-out source or an image) with Trivy against the databases of sca_db and write its scan parts (trivy/<id>.json, .status.json, .txt, .trivyignore, .gradle-graph); a scan that broke still leaves a failed status
+
+inputs:
+  targets-file:
+    description: Path to targets.json produced by the sca_resolve_targets action
+    required: true
+  target-id:
+    description: Id of the Trivy target to scan
+    required: true
+  kind:
+    description: Kind of the target, fs (a source) or image
+    required: true
+  tree:
+    description: Directory with the checkout of a source target; empty for an image or if the checkout failed
+    default: ""
+  parts-dir:
+    description: Directory to write the parts into (trivy/<id>.json, trivy/<id>.status.json, ...)
+    required: true
+  cache-dir:
+    description: Trivy cache dir with the databases of sca_db, restored by the caller
+    default: ${{ runner.temp }}/trivy-cache
+  registry:
+    description: Registry the image is pulled from; the credentials are used for it only, any other registry is anonymous
+    default: ""
+  registry-user:
+    description: Registry user; empty means anonymous
+    default: ""
+  registry-password:
+    description: Registry password or token; empty means anonymous
+    default: ""
+  lockfiles:
+    description: Number of Gradle lockfiles generated for the target, stated in its status; empty means none
+    default: ""
+  graph-dir:
+    description: Directory with the Gradle dependency graph of the target, copied into its parts; empty means none
+    default: ""
+  failed:
+    description: The reason a step before this one broke (restore of the databases, checkout, lockfile generation ...); the target is then failed with it and Trivy does not run. The action also runs after such a failure
+    default: ""
+  trivy-version:
+    description: Trivy version to install (release tag, e.g. v0.75.0); empty means the version pinned in the engine
+    default: ""
+  trivy-sha256:
+    description: sha256 of the Trivy release archive for this runner's architecture; needed only for a trivy-version without a pinned value in the engine
+    default: ""
+
+outputs:
+  status:
+    description: ok or failed; a failed target fails the action (the parts are written either way)
+    value: ${{ steps.report.outputs.status }}
+
+runs:
+  using: "composite"
+  steps:
+    # also after a failed step: the scan step below runs then too and must not fall back to the python of the runner
+    - name: Set up Python
+      if: always()
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.12"
+    # A composite action cannot use a sibling action by a relative path (it resolves in the workspace of the caller),
+    # so the commands of the sca_tools action are run directly. Their own output directories are under runner.temp
+    - name: Resolve the tools cache key
+      id: tools-key
+      shell: bash
+      env:
+        # the engine package sca, from the src layout of the action checkout
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        TRIVY_VERSION: ${{ inputs.trivy-version }}
+        TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        TOOLS_DIR: ${{ runner.temp }}/sca-tools
+        OUT: ${{ runner.temp }}/sca-tools-key-out
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -rf "$OUT"
+        args=(--tools trivy --dir "$TOOLS_DIR" --output-dir "$OUT")
+        if [ -n "$TRIVY_VERSION" ]; then
+          args+=(--trivy-version "$TRIVY_VERSION")
+        fi
+        if [ -n "$TRIVY_SHA256" ]; then
+          args+=(--trivy-sha256 "$TRIVY_SHA256")
+        fi
+        rc=0
+        python -P -m sca tools key "${args[@]}" || rc=$?
+        python "$ACTION_PATH/../_github/github_adapter.py" render "$OUT"
+        exit $rc
+    # Restore only: sca_db saves the downloads, so that the targets of a matrix do not all try to save them
+    - name: Restore the tools cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.tools-key.outputs.downloads }}
+        key: ${{ steps.tools-key.outputs.key }}
+    - name: Install Trivy
+      id: install
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        TRIVY_VERSION: ${{ inputs.trivy-version }}
+        TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        TOOLS_DIR: ${{ runner.temp }}/sca-tools
+        OUT: ${{ runner.temp }}/sca-tools-out
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        rm -rf "$OUT"
+        args=(--tools trivy --dir "$TOOLS_DIR" --output-dir "$OUT")
+        if [ -n "$TRIVY_VERSION" ]; then
+          args+=(--trivy-version "$TRIVY_VERSION")
+        fi
+        if [ -n "$TRIVY_SHA256" ]; then
+          args+=(--trivy-sha256 "$TRIVY_SHA256")
+        fi
+        rc=0
+        python -P -m sca tools install "${args[@]}" || rc=$?
+        python "$ACTION_PATH/../_github/github_adapter.py" render "$OUT"
+        exit $rc
+    # only the bin directory, the binaries just placed from the verified downloads, goes on PATH
+    - name: Add the tools to PATH
+      shell: bash
+      env:
+        BIN_DIR: ${{ steps.install.outputs.dir }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" path "$BIN_DIR"
+    # the GitHub values the commands cannot read themselves: the host and the ref this action runs from
+    - name: Resolve the run context
+      id: context
+      shell: bash
+      env:
+        SERVER_URL: ${{ github.server_url }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" context
+    # Runs also after a failed step: the status of a failed target must not be missing. The credentials are in the
+    # environment of this step only; the engine hands them to Trivy for an image of the registry and for nothing else
+    - name: Scan the target
+      if: always()
+      shell: bash
+      env:
+        SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
+        # the engine package sca, from the src layout of the action checkout
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        SCA_REGISTRY_USER: ${{ inputs.registry-user }}
+        SCA_REGISTRY_PASSWORD: ${{ inputs.registry-password }}
+        INSTALL_OUTCOME: ${{ steps.install.outcome }}
+        FAILED: ${{ inputs.failed }}
+        TARGETS_FILE: ${{ inputs.targets-file }}
+        TARGET_ID: ${{ inputs.target-id }}
+        KIND: ${{ inputs.kind }}
+        TREE: ${{ inputs.tree }}
+        PARTS_DIR: ${{ inputs.parts-dir }}
+        CACHE_DIR: ${{ inputs.cache-dir }}
+        REGISTRY: ${{ inputs.registry }}
+        LOCKFILES: ${{ inputs.lockfiles }}
+        GRAPH_DIR: ${{ inputs.graph-dir }}
+        OUTPUT_DIR: ${{ runner.temp }}/sca-scan-out
+      run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -rf "$OUTPUT_DIR"
+        # the install broke, or was skipped because a step before it broke: no Trivy
+        if [ -z "$FAILED" ] && [ "$INSTALL_OUTCOME" != success ]; then
+          FAILED="trivy setup failure"
+        fi
+        args=(--targets-file "$TARGETS_FILE" --target-id "$TARGET_ID" --kind "$KIND" --parts-dir "$PARTS_DIR" --cache-dir "$CACHE_DIR" --output-dir "$OUTPUT_DIR")
+        # the optional arguments, as name:value; an empty value is left out
+        for option in "tree:$TREE" "registry:$REGISTRY" "lockfiles:$LOCKFILES" "graph-dir:$GRAPH_DIR" "failed:$FAILED"; do
+          if [ -n "${option#*:}" ]; then
+            args+=("--${option%%:*}" "${option#*:}")
+          fi
+        done
+        python -P -m sca scan "${args[@]}"
+    # shows what the command wrote into its output directory: step outputs and annotations
+    - name: Report the results
+      id: report
+      if: always()
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ runner.temp }}/sca-scan-out
+        SCA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" render "$OUTPUT_DIR"
