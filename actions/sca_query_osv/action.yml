@@ -29,58 +29,53 @@ runs:
       with:
         python-version: "3.12"
     # A composite action cannot use a sibling action by a relative path (it resolves in the workspace of the caller),
-    # so the steps of actions/_install_trivy are repeated here and share its install.sh
-    - name: Resolve the Trivy tool directory
-      id: trivy-dir
+    # so the commands of the sca_tools action are run directly. Their own output directories are under runner.temp,
+    # never the output-dir of this action
+    - name: Resolve the tools cache key
+      id: tools-key
       shell: bash
       env:
-        TRIVY_VERSION: ${{ inputs.trivy-version }}
-        ACTION_PATH: ${{ github.action_path }}
-      run: |
-        bash "$ACTION_PATH/../_install_trivy/install.sh" check "$TRIVY_VERSION"
-        echo "path=$RUNNER_TOOL_CACHE/sca-trivy/$TRIVY_VERSION" >> "$GITHUB_OUTPUT"
-        echo "key=sca-trivy-$TRIVY_VERSION-$RUNNER_OS-$RUNNER_ARCH" >> "$GITHUB_OUTPUT"
-    - name: Cache Trivy
-      id: trivy-cache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ steps.trivy-dir.outputs.path }}
-        key: ${{ steps.trivy-dir.outputs.key }}
-    - name: Install Trivy
-      shell: bash
-      env:
+        # the engine package sca, from the src layout of the action checkout
+        PYTHONPATH: ${{ github.action_path }}/../../src
         TRIVY_VERSION: ${{ inputs.trivy-version }}
         TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
-        TRIVY_DIR: ${{ steps.trivy-dir.outputs.path }}
+        OUT: ${{ runner.temp }}/sca-tools-key-out
         ACTION_PATH: ${{ github.action_path }}
-      run: bash "$ACTION_PATH/../_install_trivy/install.sh" "$TRIVY_VERSION" "$TRIVY_DIR"
-    - name: Add Trivy to PATH
+      run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -rf "$OUT"
+        args=(--tools trivy,osv-scanner --output-dir "$OUT")
+        args+=(--trivy-version "$TRIVY_VERSION")
+        if [ -n "$TRIVY_SHA256" ]; then
+          args+=(--trivy-sha256 "$TRIVY_SHA256")
+        fi
+        python -P -m sca tools key "${args[@]}"
+        python "$ACTION_PATH/../_github/github_adapter.py" render "$OUT"
+    # The installer verifies every cached download against the pinned sha256 on every run and downloads it again on a
+    # mismatch, so a poisoned cache is harmless.
+    - name: Cache the tools
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/sca-tools
+        key: ${{ steps.tools-key.outputs.key }}
+    - name: Install Trivy and osv-scanner
       shell: bash
       env:
-        TRIVY_DIR: ${{ steps.trivy-dir.outputs.path }}
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        TRIVY_VERSION: ${{ inputs.trivy-version }}
+        TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        TOOLS_DIR: ${{ runner.temp }}/sca-tools
+        OUT: ${{ runner.temp }}/sca-tools-out
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        echo "$TRIVY_DIR" >> "$GITHUB_PATH"
-        "$TRIVY_DIR/trivy" --version
-    # The checksums are pinned here, not read from the release: a replaced release must not pass
-    - name: Install osv-scanner
-      shell: bash
-      env:
-        OSV_SCANNER_VERSION: v2.7.0
-        SHA256_AMD64: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
-        SHA256_ARM64: 4061ef4c021ed3c47f203b818f337e351336cc5cd67c0274fc36bd1dfc728dd7
-      run: |
-        case "$(uname -m)" in
-          x86_64) arch=amd64; sha256="$SHA256_AMD64" ;;
-          aarch64 | arm64) arch=arm64; sha256="$SHA256_ARM64" ;;
-          *) echo "::error::unsupported architecture $(uname -m)"; exit 1 ;;
-        esac
-        mkdir -p "$RUNNER_TEMP/osv-scanner"
-        curl --fail --silent --show-error --location --retry 3 \
-          --output "$RUNNER_TEMP/osv-scanner/osv-scanner" \
-          "https://github.com/google/osv-scanner/releases/download/$OSV_SCANNER_VERSION/osv-scanner_linux_$arch"
-        echo "$sha256  $RUNNER_TEMP/osv-scanner/osv-scanner" | sha256sum --check -
-        chmod +x "$RUNNER_TEMP/osv-scanner/osv-scanner"
-        echo "$RUNNER_TEMP/osv-scanner" >> "$GITHUB_PATH"
+        rm -rf "$OUT"
+        args=(--tools trivy,osv-scanner --dir "$TOOLS_DIR" --output-dir "$OUT")
+        args+=(--trivy-version "$TRIVY_VERSION")
+        if [ -n "$TRIVY_SHA256" ]; then
+          args+=(--trivy-sha256 "$TRIVY_SHA256")
+        fi
+        python -P -m sca tools install "${args[@]}"
+        python "$ACTION_PATH/../_github/github_adapter.py" path "$TOOLS_DIR"
     # the GitHub values the commands cannot read themselves: the host and the ref this action runs from
     - name: Resolve the run context
       id: context

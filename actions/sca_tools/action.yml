@@ -1,0 +1,96 @@
+name: Install the SCA scan tools
+description: Install Trivy, osv-scanner, oras and crane (pinned versions, sha256 verified on every run) into a directory and put it on PATH
+
+inputs:
+  tools:
+    description: Comma separated tools to install (trivy, osv-scanner, oras, crane)
+    default: trivy,osv-scanner,oras,crane
+  trivy-version:
+    description: Trivy version to install (release tag, e.g. v0.75.0); empty means the version pinned in the engine
+    default: ""
+  trivy-sha256:
+    description: sha256 of the Trivy release archive for this runner's architecture; needed only for a trivy-version without a pinned value in the engine
+    default: ""
+  dir:
+    description: Directory the tools are installed into; it keeps the verified downloads
+    default: ${{ runner.temp }}/sca-tools
+
+outputs:
+  dir:
+    description: Absolute path of the directory with the tools (already on PATH)
+    value: ${{ steps.report.outputs.dir }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: "3.12"
+    # the cache key comes from the pin table of the engine: the platform, the tools, their versions and checksums
+    - name: Resolve the cache key
+      id: tools-key
+      shell: bash
+      env:
+        # the engine package sca, from the src layout of the action checkout
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        TOOLS: ${{ inputs.tools }}
+        TRIVY_VERSION: ${{ inputs.trivy-version }}
+        TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        OUTPUT_DIR: ${{ runner.temp }}/sca-tools-key-out
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -rf "$OUTPUT_DIR"
+        args=(--tools "$TOOLS" --output-dir "$OUTPUT_DIR")
+        if [ -n "$TRIVY_VERSION" ]; then
+          args+=(--trivy-version "$TRIVY_VERSION")
+        fi
+        if [ -n "$TRIVY_SHA256" ]; then
+          args+=(--trivy-sha256 "$TRIVY_SHA256")
+        fi
+        python -P -m sca tools key "${args[@]}"
+        python "$ACTION_PATH/../_github/github_adapter.py" render "$OUTPUT_DIR"
+    # The cache holds only the tools directory. The installer verifies every cached download against the pinned
+    # sha256 on every run and downloads it again on a mismatch, so a poisoned cache is harmless.
+    - name: Cache the tools
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.dir }}
+        key: ${{ steps.tools-key.outputs.key }}
+    - name: Install the tools
+      shell: bash
+      env:
+        # the engine package sca, from the src layout of the action checkout
+        PYTHONPATH: ${{ github.action_path }}/../../src
+        TOOLS: ${{ inputs.tools }}
+        TRIVY_VERSION: ${{ inputs.trivy-version }}
+        TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        TOOLS_DIR: ${{ inputs.dir }}
+        OUTPUT_DIR: ${{ runner.temp }}/sca-tools-out
+      run: |
+        # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
+        rm -rf "$OUTPUT_DIR"
+        args=(--tools "$TOOLS" --dir "$TOOLS_DIR" --output-dir "$OUTPUT_DIR")
+        if [ -n "$TRIVY_VERSION" ]; then
+          args+=(--trivy-version "$TRIVY_VERSION")
+        fi
+        if [ -n "$TRIVY_SHA256" ]; then
+          args+=(--trivy-sha256 "$TRIVY_SHA256")
+        fi
+        python -P -m sca tools install "${args[@]}"
+    - name: Add the tools to PATH
+      shell: bash
+      env:
+        TOOLS_DIR: ${{ inputs.dir }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" path "$TOOLS_DIR"
+    # shows what the command wrote into its output directory: step outputs, annotations
+    - name: Report the results
+      id: report
+      if: always()
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ runner.temp }}/sca-tools-out
+        ACTION_PATH: ${{ github.action_path }}
+      run: python "$ACTION_PATH/../_github/github_adapter.py" render "$OUTPUT_DIR"

@@ -687,8 +687,10 @@ def run(
     }
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+def parse_args(
+    argv: Sequence[str] | None = None, prog: str | None = None
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog=prog, description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--repository", required=True, help="owner/name")
     parser.add_argument("--registry", default=GHCR_HOST)
     parser.add_argument("--images", default="", help="image names, one per line")
@@ -700,8 +702,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+def main(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
+    args = parse_args(argv, prog)
     return execute(
         "targets", args.output_dir, lambda notes: run(args, os.environ, notes)
     )

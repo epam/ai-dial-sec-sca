@@ -29,8 +29,8 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+def main(argv: list[str] | None = None, prog: str | None = None) -> int:
+    parser = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n")[0])
     parser.add_argument("--reports", nargs="+", required=True, type=Path)
     parser.add_argument("--config", default="{}", help="the configuration as JSON text")
     parser.add_argument("--output-dir", default=Path("out"), type=Path)

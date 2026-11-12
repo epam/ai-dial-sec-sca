@@ -6,7 +6,7 @@
   "required": ["contract", "command", "status", "outputs"],
   "properties": {
     "contract": {"const": 1},
-    "command": {"enum": ["targets", "db", "scan", "osv", "merge", "plan", "fix-prepare", "run", "tools-install", "collect", "digest"]},
+    "command": {"enum": ["targets", "db", "scan", "osv", "merge", "plan", "fix-prepare", "run", "tools-install", "tools-key", "collect", "digest"]},
     "status": {"enum": ["ok", "failed_targets", "error"], "description": "ok = exit 0; failed_targets = exit 0 (merge only), outputs complete; error = exit 1 or 2, outputs may be partial."},
     "engine": {"type": ["string", "null"], "description": "Engine or notifier ref that ran."},
     "message": {"type": ["string", "null"], "description": "Error text when status is error."},

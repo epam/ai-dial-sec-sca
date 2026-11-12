@@ -292,8 +292,10 @@ def run_all(args: argparse.Namespace, run: Runner, now: datetime) -> None:
             print(f"{tid}: {status}" + (f" ({reason})" if reason else ""))
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+def parse_args(
+    argv: Sequence[str] | None = None, prog: str | None = None
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog=prog, description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--targets-file", required=True, type=Path)
     parser.add_argument("--parts-dir", required=True, type=Path)
     parser.add_argument("--output-dir", default=Path("out"), type=Path)
@@ -305,8 +307,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+def main(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
+    args = parse_args(argv, prog)
 
     def body(_notes: Annotations) -> tuple[str, dict[str, Any]]:
         run_all(args, run_command, datetime.now(UTC))

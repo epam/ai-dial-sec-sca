@@ -8,6 +8,7 @@ of the action is the one of the command step. ``python github_adapter.py context
 writes the step outputs ``host`` (of ``SERVER_URL``) and ``engine-ref`` (the
 ``ENGINE_REF_INPUT`` if set, else the ref in the runner path ``ACTION_PATH``), which
 the action passes on as ``SCA_RUN_HOST`` and ``SCA_RUN_ENGINE_REF``.
+``python github_adapter.py path DIR`` puts DIR on the ``PATH`` of the later steps.
 """
 
 from __future__ import annotations
@@ -147,5 +148,7 @@ if __name__ == "__main__":
     if sys.argv[1] == "context":
         text = "".join(output_text(k, v) for k, v in context_outputs(os.environ).items())
         append_text(os.environ["GITHUB_OUTPUT"], text)
+    elif sys.argv[1] == "path":
+        append_text(os.environ["GITHUB_PATH"], f"{sys.argv[2]}\n")
     else:
         render(Path(sys.argv[2]), os.environ)
