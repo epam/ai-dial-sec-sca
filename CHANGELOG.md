@@ -9,14 +9,14 @@ Action inputs and outputs are unchanged.
 - Run context `SCA_RUN_*` (`SCA_RUN_HOST`, `_REPO`, `_ID`, `_ATTEMPT`, `_URL`, `_EVENT`, `_ACTOR`, `_ENGINE_REF`): the commands of the scan engine no longer read `GITHUB_*` variables; the composite actions map the GitHub values.
 - `outputs.json`, `annotations.json` and `summary.md` in the output directory of a command (also when it fails): the step outputs, the workflow annotations and the job summary are rendered from them by `actions/_github/github_adapter.py`; the commands print no workflow commands.
 - `host` in `targets.json` and `report.json`.
-- `sca tools install`: installs Trivy v0.75.0, osv-scanner v2.7.0, oras v1.3.4 and crane v0.22.1 (Linux amd64 and arm64) from one pin table (`src/sca/tools/pins.py`); the sha256 is verified on every run, also of a cached download. Another Trivy version needs `--trivy-sha256`. `sca tools key` prints the cache key of the install directory.
-- `actions/sca_tools`: the public action around it (inputs `tools`, `trivy-version`, `trivy-sha256`, `dir`; output `dir`); the tools are on `PATH` afterwards.
+- `sca tools install`: installs Trivy v0.75.0, osv-scanner v2.7.0, oras v1.3.4 and crane v0.22.1 (Linux amd64 and arm64) from one pin table (`src/sca/tools/pins.py`); the sha256 is verified on every run, also of a cached download. `DIR/downloads` keeps the verified artifacts, `DIR/bin` is recreated on every run with only the binaries placed from them. Another Trivy version needs `--trivy-sha256`. `sca tools key` prints the cache key of the downloads.
+- `actions/sca_tools`: the public action around it (inputs `tools`, `trivy-version`, `trivy-sha256`, `dir`; output `dir`, the absolute `bin` directory); only `bin` is on `PATH` afterwards.
 
 ### Changed
 
 - One Python package, `ai-dial-sec-sca` (src layout), with the command `sca` (`targets`, `osv`, `merge`, `plan`); the actions run `python -P -m sca <command>` so the checked-out workspace cannot shadow the engine.
 - `sca targets` exits 2 on a usage error.
-- `sca_query_osv` and `sca_resolve_targets` install their tools with `sca tools install`; osv-scanner is pinned in the table instead of the action, and oras comes from the table (v1.3.4) instead of `oras-project/setup-oras`. The tools directory is cached by `actions/cache` under a key from `sca tools key` (platform, tools, pinned versions and checksums). The inputs `trivy-version` and `trivy-sha256` keep their meaning.
+- `sca_query_osv` and `sca_resolve_targets` install their tools with `sca tools install`; osv-scanner is pinned in the table instead of the action, and oras comes from the table (v1.3.4) instead of `oras-project/setup-oras`. Only the verified downloads are cached by `actions/cache` (the binaries are rebuilt on every run) under a key from `sca tools key` (platform, tools, pinned versions and checksums). The inputs `trivy-version` and `trivy-sha256` keep their meaning.
 - `sca <command> --help` shows `usage: sca <command> ...` (it showed `__main__.py`).
 - **BREAKING for direct consumers:** the internal action `actions/_install_trivy` is removed; use `actions/sca_tools`.
 - **BREAKING for direct consumers:** the packages `sca-rules` and `sca-fix-plan` in subdirectories are gone; import `sca.rules` and `sca.plan` from `ai-dial-sec-sca`. The scripts are no longer runnable by path; use `python -m sca <command>`.

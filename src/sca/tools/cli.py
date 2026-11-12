@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
+import os
 import platform
 import re
 import shutil
@@ -14,7 +16,7 @@ import time
 import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from sca.lib.context import CommandError, UsageError
 from sca.lib.outputs import Annotations, execute
@@ -22,8 +24,9 @@ from sca.lib.outputs import Annotations, execute
 from . import pins
 
 ATTEMPTS = 3
+DOWNLOADS, BIN = "downloads", "bin"
 CHUNK = 1 << 20
-TAG = re.compile(r"v\d+\.\d+\.\d+")
+TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 ARCHITECTURES = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
@@ -46,57 +49,96 @@ def fetch(url: str, target: Path) -> None:
             with urllib.request.urlopen(url, timeout=60) as response, target.open("wb") as f:
                 shutil.copyfileobj(response, f, CHUNK)
             return
-        except OSError as error:
+        except (OSError, http.client.HTTPException) as error:
             if attempt == ATTEMPTS:
                 raise CommandError(f"cannot download {url}: {error}") from error
             time.sleep(2 * attempt)
 
 
-def sha256_of(path: Path) -> str:
+def sha256_of(f: BinaryIO) -> str:
+    """The sha256 of the whole file, which is left at its start."""
     digest = hashlib.sha256()
-    with path.open("rb") as f:
-        while chunk := f.read(CHUNK):
-            digest.update(chunk)
+    f.seek(0)
+    while chunk := f.read(CHUNK):
+        digest.update(chunk)
+    f.seek(0)
     return digest.hexdigest()
 
 
-def verified_download(url: str, sha256: str, directory: Path) -> Path:
-    """The artifact of ``url`` in ``directory``, verified: a file found there is
-    checked again and downloaded again if it does not match; a download that does
+def clear(path: Path) -> None:
+    """Nothing at ``path`` any more, whatever it was."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def open_verified(path: Path, sha256: str) -> BinaryIO | None:
+    """``path`` open, if it is a regular file with this sha256; the handle that was
+    hashed is the one to read from, so the content cannot change in between.
+    """
+    if path.is_symlink() or not path.is_file():
+        return None
+    f = path.open("rb")
+    if sha256_of(f) == sha256:
+        return f
+    f.close()
+    return None
+
+
+def verified_download(url: str, sha256: str, directory: Path) -> BinaryIO:
+    """The artifact of ``url`` in ``directory``, open and verified: a file found there
+    is checked again and downloaded again if it does not match; a download that does
     not match is an error and leaves no file.
     """
     path = directory / url.rsplit("/", 1)[1]
-    if path.is_file() and sha256_of(path) == sha256:
-        return path
-    path.unlink(missing_ok=True)
+    if (f := open_verified(path, sha256)) is not None:
+        return f
+    clear(path)
     with tempfile.TemporaryDirectory(dir=directory) as scratch:
         part = Path(scratch) / path.name
         fetch(url, part)
-        if (found := sha256_of(part)) != sha256:
+        with part.open("rb") as f:
+            found = sha256_of(f)
+        if found != sha256:
             raise CommandError(f"sha256 of {path.name} is {found}, the pinned value is {sha256}")
         part.replace(path)
-    return path
+    if (f := open_verified(path, sha256)) is None:
+        raise CommandError(f"{path.name} changed after the download")
+    return f
 
 
-def place(tool: str, member: str | None, artifact: Path, directory: Path) -> None:
+def place(tool: str, member: str | None, artifact: BinaryIO, directory: Path) -> None:
     """The binary of ``tool`` in ``directory``, executable: the one ``member`` of the
-    tar.gz, or the artifact itself.
+    tar.gz ``artifact``, or the artifact itself; written aside and moved into place.
     """
     binary = directory / tool
-    if member is None:
-        shutil.copyfile(artifact, binary)
-    else:
-        with tarfile.open(artifact) as archive:
+    with artifact:
+        if member is None:
+            write_executable(artifact, binary)
+            return
+        with tarfile.open(fileobj=artifact) as archive:
             try:
                 entry = archive.getmember(member)
             except KeyError:
-                raise CommandError(f"{artifact.name} has no {member}") from None
+                raise CommandError(f"the archive of {tool} has no {member}") from None
             source = archive.extractfile(entry) if entry.isfile() else None
             if source is None:
-                raise CommandError(f"{member} in {artifact.name} is not a file")
-            with source, binary.open("wb") as f:
-                shutil.copyfileobj(source, f, CHUNK)
-    binary.chmod(0o755)
+                raise CommandError(f"{member} in the archive of {tool} is not a regular file")
+            with source:
+                write_executable(source, binary)
+
+
+def write_executable(source: BinaryIO, binary: Path) -> None:
+    fd, name = tempfile.mkstemp(dir=binary.parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            shutil.copyfileobj(source, f, CHUNK)
+        os.chmod(name, 0o755)
+        os.replace(name, binary)
+    except BaseException:
+        Path(name).unlink(missing_ok=True)
+        raise
 
 
 def resolve(
@@ -123,19 +165,27 @@ def resolve(
 
 
 def install(resolved: dict[str, tuple[str, str, str]], directory: Path) -> dict[str, str]:
-    """Install the resolved tools into ``directory``; the version of each."""
-    directory.mkdir(parents=True, exist_ok=True)
+    """Install the resolved tools: the verified downloads stay in ``directory/downloads``
+    (the only part to cache), the binaries are placed in ``directory/bin``, which is
+    recreated empty, so only what was just placed from a verified artifact is in it.
+    The version of each tool.
+    """
+    downloads, binaries = directory / DOWNLOADS, directory / BIN
+    if not downloads.is_dir():
+        clear(downloads)
+        downloads.mkdir(parents=True)
+    clear(binaries)
+    binaries.mkdir(parents=True)
     for name, (_, sha256, url) in resolved.items():
-        (directory / name).unlink(missing_ok=True)  # no binary of an earlier run stays on a failure
-        place(name, pins.TOOLS[name].member, verified_download(url, sha256, directory), directory)
+        place(name, pins.TOOLS[name].member, verified_download(url, sha256, downloads), binaries)
     return {name: tag for name, (tag, _, _) in resolved.items()}
 
 
 def cache_key(resolved: dict[str, tuple[str, str, str]], system: str) -> str:
-    """The cache key of an install directory: the platform and the tools with their
-    versions and checksums, so a change of the table is a new key.
+    """The cache key of the downloads: the platform and the tools with their versions
+    and checksums, so a change of the table is a new key.
     """
-    digest = hashlib.sha256(json.dumps(resolved, sort_keys=True).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps([system, resolved], sort_keys=True).encode()).hexdigest()
     return f"sca-tools-{system}-{digest[:16]}"
 
 
@@ -149,14 +199,19 @@ def parse_args(argv: Sequence[str] | None, prog: str | None) -> argparse.Namespa
     common.add_argument(
         "--trivy-sha256", help="sha256 of the archive; needed for a version that is not pinned"
     )
-    install_parser = commands.add_parser(
-        "install", parents=[common], description="Install the tools into a directory."
+    common.add_argument(
+        "--dir", required=True, type=Path, help="the install directory; resolved to an absolute path"
     )
-    install_parser.add_argument("--dir", required=True, type=Path)
+    commands.add_parser(
+        "install",
+        parents=[common],
+        description="Install the tools: verified downloads in DIR/downloads, binaries in DIR/bin.",
+    )
     commands.add_parser(
         "key",
         parents=[common],
-        description="The cache key of the install directory (output key), without installing.",
+        description="The cache key of DIR/downloads (output key) and its path (output downloads), "
+        "without installing.",
     )
     return parser.parse_args(argv)
 
@@ -172,13 +227,16 @@ def main(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
             raise UsageError(
                 f"--trivy-version must be a release tag of the form vX.Y.Z, got {args.trivy_version!r}"
             )
-        if args.trivy_sha256 is not None and not SHA256.fullmatch(args.trivy_sha256):
-            raise UsageError("--trivy-sha256 must be 64 lowercase hex digits")
+        trivy_sha256 = args.trivy_sha256 and args.trivy_sha256.lower()
+        if trivy_sha256 is not None and not SHA256.fullmatch(trivy_sha256):
+            raise UsageError("--trivy-sha256 must be 64 hex digits")
         system = current_platform()
-        resolved = resolve(tools, args.trivy_version, args.trivy_sha256, system)
-        if args.command == "key":
-            return "ok", {"key": cache_key(resolved, system)}
+        resolved = resolve(tools, args.trivy_version, trivy_sha256, system)
         directory = args.dir.resolve()
-        return "ok", {"dir": str(directory), "versions": install(resolved, directory)}
+        outputs = {"downloads": str(directory / DOWNLOADS)}
+        if args.command == "key":
+            return "ok", {"key": cache_key(resolved, system), **outputs}
+        versions = install(resolved, directory)
+        return "ok", {"dir": str(directory / BIN), **outputs, "versions": versions}
 
     return execute(f"tools-{args.command}", args.output_dir, body)

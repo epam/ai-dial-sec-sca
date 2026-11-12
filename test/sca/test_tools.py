@@ -21,13 +21,22 @@ SYSTEM = "linux-amd64"
 ARCHIVE = "fake-tool_linux_amd64.tar.gz"
 
 
-def make_tar(path: Path, members: dict[str, bytes]) -> bytes:
+def make_tar(path: Path, members: dict[str, bytes], links: dict[str, tuple[bytes, str]] | None = None) -> bytes:
+    """``links``: member -> (tar link type, target)."""
     with tarfile.open(path, "w:gz") as tar:
         for name, data in members.items():
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
+        for name, (kind, target) in (links or {}).items():
+            info = tarfile.TarInfo(name)
+            info.type, info.linkname = kind, target
+            tar.addfile(info)
     return path.read_bytes()
+
+
+BIN = "tools/bin"
+DOWNLOADS = "tools/downloads"
 
 
 def digest(data: bytes) -> str:
@@ -72,7 +81,7 @@ def served(tmp_path, monkeypatch):
 
 def run(tmp_path: Path, *extra: str) -> int:
     return cli.main(
-        ["tools", "install", "--dir", str(tmp_path / "bin"), "--output-dir", str(tmp_path / "out"), *extra]
+        ["tools", "install", "--dir", str(tmp_path / "tools"), "--output-dir", str(tmp_path / "out"), *extra]
     )
 
 
@@ -96,7 +105,7 @@ def test_the_table_has_every_tool_for_both_platforms() -> None:
 
 def test_install_puts_executable_binaries_and_writes_outputs(tmp_path, served) -> None:
     assert run(tmp_path) == 0
-    binaries = tmp_path / "bin"
+    binaries = tmp_path / BIN
     assert (binaries / "trivy").read_bytes() == b"#!trivy\n"
     assert (binaries / "osv-scanner").read_bytes() == b"#!osv\n"
     if sys.platform != "win32":
@@ -105,40 +114,41 @@ def test_install_puts_executable_binaries_and_writes_outputs(tmp_path, served) -
     assert written["command"] == "tools-install" and written["status"] == "ok"
     assert written["outputs"] == {
         "dir": str(binaries.resolve()),
+        "downloads": str((tmp_path / DOWNLOADS).resolve()),
         "versions": {"trivy": "v1.2.3", "osv-scanner": "v2.0.0"},
     }
 
 
 def test_tools_option_selects_the_tools(tmp_path, served) -> None:
     assert run(tmp_path, "--tools", "osv-scanner") == 0
-    assert not (tmp_path / "bin" / "trivy").exists()
+    assert not (tmp_path / BIN / "trivy").exists()
     assert outputs(tmp_path)["outputs"]["versions"] == {"osv-scanner": "v2.0.0"}
 
 
 def test_a_verified_cache_is_not_downloaded_again(tmp_path, served) -> None:
     downloads, _ = served
     assert run(tmp_path) == 0
-    (tmp_path / "bin" / "trivy").unlink()
+    (tmp_path / BIN / "trivy").unlink()
     assert run(tmp_path) == 0
     assert len(downloads) == 2
-    assert (tmp_path / "bin" / "trivy").exists()
+    assert (tmp_path / BIN / "trivy").exists()
 
 
 def test_a_tampered_cache_is_downloaded_again(tmp_path, served) -> None:
     downloads, files = served
     assert run(tmp_path) == 0
-    (tmp_path / "bin" / "trivy_1.2.3.tar.gz").write_bytes(b"tampered")
+    (tmp_path / DOWNLOADS / "trivy_1.2.3.tar.gz").write_bytes(b"tampered")
     assert run(tmp_path) == 0
     assert len(downloads) == 3
-    assert (tmp_path / "bin" / "trivy_1.2.3.tar.gz").read_bytes() == files["https://example.test/trivy_1.2.3.tar.gz"]
-    assert (tmp_path / "bin" / "trivy").read_bytes() == b"#!trivy\n"
+    assert (tmp_path / DOWNLOADS / "trivy_1.2.3.tar.gz").read_bytes() == files["https://example.test/trivy_1.2.3.tar.gz"]
+    assert (tmp_path / BIN / "trivy").read_bytes() == b"#!trivy\n"
 
 
 def test_a_mismatch_on_a_fresh_download_is_an_error_without_a_binary(tmp_path, served) -> None:
     _, files = served
     files["https://example.test/osv"] = b"replaced"
     assert run(tmp_path, "--tools", "osv-scanner") == 1
-    assert sorted(p.name for p in (tmp_path / "bin").iterdir()) == []
+    assert sorted(p.name for p in (tmp_path / BIN).iterdir()) == []
     written = outputs(tmp_path)
     assert written["status"] == "error" and "sha256" in written["message"]
 
@@ -146,11 +156,11 @@ def test_a_mismatch_on_a_fresh_download_is_an_error_without_a_binary(tmp_path, s
 def test_a_mismatch_removes_the_binary_of_an_earlier_run(tmp_path, served) -> None:
     _, files = served
     assert run(tmp_path, "--tools", "osv-scanner") == 0
-    (tmp_path / "bin" / "osv").write_bytes(b"tampered")
-    (tmp_path / "bin" / "osv-scanner").write_bytes(b"tampered")
+    (tmp_path / DOWNLOADS / "osv").write_bytes(b"tampered")
+    (tmp_path / BIN / "osv-scanner").write_bytes(b"tampered")
     files["https://example.test/osv"] = b"replaced"
     assert run(tmp_path, "--tools", "osv-scanner") == 1
-    assert not (tmp_path / "bin" / "osv-scanner").exists()
+    assert not (tmp_path / BIN / "osv-scanner").exists()
 
 
 def test_a_trivy_version_that_is_not_pinned_needs_a_sha256(tmp_path, served) -> None:
@@ -187,7 +197,7 @@ def test_the_archive_must_hold_the_binary(tmp_path, served, monkeypatch) -> None
     )
     served[1]["https://example.test/empty.tgz"] = data
     assert run(tmp_path, "--tools", "trivy") == 1
-    assert not (tmp_path / "bin" / "trivy").exists()
+    assert not (tmp_path / BIN / "trivy").exists()
 
 
 @pytest.mark.parametrize(
@@ -228,7 +238,7 @@ def test_the_github_adapter_puts_a_dir_on_the_path(tmp_path) -> None:
 
 
 def key_of(tmp_path: Path, *extra: str) -> str:
-    assert cli.main(["tools", "key", "--output-dir", str(tmp_path / "key"), *extra]) == 0
+    assert cli.main(["tools", "key", "--dir", str(tmp_path / "tools"), "--output-dir", str(tmp_path / "key"), *extra]) == 0
     written = json.loads((tmp_path / "key" / "outputs.json").read_text(encoding="utf-8"))
     assert written["command"] == "tools-key"
     return written["outputs"]["key"]
@@ -246,5 +256,91 @@ def test_the_cache_key_follows_the_pins_the_tools_and_the_platform(tmp_path, ser
     assert key_of(tmp_path) != both
 
 
+def test_a_sha256_only_change_of_a_pin_is_a_new_key(tmp_path, served, monkeypatch) -> None:
+    before = key_of(tmp_path)
+    other = pins.TOOLS["trivy"]
+    monkeypatch.setitem(
+        pins.TOOLS, "trivy", pins.Tool(other.url, other.arch, "v1.2.3", {"v1.2.3": {SYSTEM: "0" * 64}}, other.member)
+    )
+    assert key_of(tmp_path) != before
+
+
+def test_a_platform_change_is_a_new_key(tmp_path, served, monkeypatch) -> None:
+    before = key_of(tmp_path)
+    for tool in pins.TOOLS.values():  # the same pins for the other platform: only the platform differs
+        tool.arch["linux-arm64"] = tool.arch[SYSTEM]
+        tool.sha256[tool.default]["linux-arm64"] = tool.sha256[tool.default][SYSTEM]
+    monkeypatch.setattr(tools_cli, "current_platform", lambda: "linux-arm64")
+    after = key_of(tmp_path)
+    assert after != before and after.startswith("sca-tools-linux-arm64-")
+
+
+def key_of_status(tmp_path: Path, *extra: str) -> int:
+    return cli.main(["tools", "key", "--dir", str(tmp_path / "tools"), "--output-dir", str(tmp_path / "key"), *extra])
+
+
 def test_the_cache_key_needs_the_sha256_of_an_unpinned_trivy(tmp_path, served) -> None:
-    assert cli.main(["tools", "key", "--output-dir", str(tmp_path / "key"), "--trivy-version", "v9.9.9"]) == 2
+    assert key_of_status(tmp_path, "--trivy-version", "v9.9.9") == 2
+
+
+@pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE])
+def test_a_link_as_the_archive_member_is_refused(tmp_path, served, kind) -> None:
+    data = make_tar(tmp_path / "links.tgz", {"README": b"x"}, {"trivy": (kind, "README")})
+    pins.TOOLS["trivy"] = pins.Tool(
+        url="https://example.test/links.tgz", arch={SYSTEM: "x"}, default="v1.0.0",
+        sha256={"v1.0.0": {SYSTEM: digest(data)}}, member="trivy",
+    )
+    served[1]["https://example.test/links.tgz"] = data
+    assert run(tmp_path, "--tools", "trivy") == 1
+    assert "not a regular file" in outputs(tmp_path)["message"]
+    assert not (tmp_path / BIN / "trivy").exists()
+
+
+def test_a_stray_entry_never_reaches_the_bin_directory(tmp_path, served) -> None:
+    assert run(tmp_path) == 0
+    stray = tmp_path / DOWNLOADS / "evil"
+    stray.write_bytes(b"#!evil\n")
+    (tmp_path / BIN / "evil").write_bytes(b"#!evil\n")
+    assert run(tmp_path) == 0
+    assert sorted(p.name for p in (tmp_path / BIN).iterdir()) == ["osv-scanner", "trivy"]
+    assert stray.exists()
+
+
+def test_a_directory_where_a_file_is_expected_is_replaced(tmp_path, served) -> None:
+    (tmp_path / DOWNLOADS / "osv").mkdir(parents=True)
+    (tmp_path / DOWNLOADS / "osv" / "inner").write_bytes(b"x")
+    (tmp_path / "tools" / "bin").write_bytes(b"a file where bin goes")
+    assert run(tmp_path, "--tools", "osv-scanner") == 0
+    assert (tmp_path / BIN / "osv-scanner").read_bytes() == b"#!osv\n"
+
+
+def test_an_uppercase_trivy_sha256_is_accepted(tmp_path, served) -> None:
+    _, files = served
+    data = files["https://example.test/trivy_1.2.3.tar.gz"]
+    files["https://example.test/trivy_9.9.9.tar.gz"] = data
+    assert run(tmp_path, "--tools", "trivy", "--trivy-version", "v9.9.9", "--trivy-sha256", digest(data).upper()) == 0
+
+
+def test_a_non_ascii_digit_is_not_a_version(tmp_path, served) -> None:
+    assert run(tmp_path, "--trivy-version", "v١.2.3") == 2
+
+
+def test_a_failed_install_still_writes_the_annotation(tmp_path, served) -> None:
+    served[1]["https://example.test/osv"] = b"replaced"
+    assert run(tmp_path, "--tools", "osv-scanner") == 1
+    notes = json.loads((tmp_path / "out" / "annotations.json").read_text(encoding="utf-8"))
+    assert [n["level"] for n in notes] == ["error"] and "sha256" in notes[0]["message"]
+
+
+def test_a_download_is_retried_on_an_http_error(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def urlopen(url, timeout):
+        calls.append(url)
+        raise tools_cli.http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr(tools_cli.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(tools_cli.time, "sleep", lambda _: None)
+    with pytest.raises(tools_cli.CommandError, match="cannot download"):
+        tools_cli.fetch("https://example.test/x", tmp_path / "x")
+    assert len(calls) == tools_cli.ATTEMPTS
