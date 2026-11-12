@@ -1,9 +1,11 @@
 """Download the Trivy databases: ``sca db --cache-dir DIR``.
 
 Downloads the vulnerability and the Java database into ``DIR`` with the installed
-``trivy``, so that the scan of every target of a run uses the same snapshot. Writes
-``db-info.json`` (``vulnerability_db_updated_at``, ``java_db_updated_at``) into the
-output dir, which is also the output ``db-info`` and the ``summary.md``.
+``trivy`` (so that the scan of every target of a run uses the same snapshot). Trivy runs
+with nothing of the machine's configuration: no ``TRIVY_*`` but the repositories, no
+Docker config, no credentials. Writes ``db-info.json`` (``vulnerability_db_updated_at``,
+``java_db_updated_at``) into the output dir, which is also the output ``db-info`` and
+the ``summary.md``.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from sca.lib import dump_json
 from sca.lib.context import CommandError
 from sca.lib.outputs import Annotations, execute
 
-from . import DB_REPOSITORY, JAVA_DB_REPOSITORY, trivy
+from . import DB_REPOSITORY, JAVA_DB_REPOSITORY, isolated, trivy
 
 DOWNLOADS = ("--download-db-only", "--download-java-db-only")
 
@@ -52,10 +54,11 @@ def main(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
             or os.environ.get("TRIVY_JAVA_DB_REPOSITORY")
             or JAVA_DB_REPOSITORY,
         }
-        for flag in DOWNLOADS:
-            if (done := trivy(["image", flag], env)).returncode:
-                raise CommandError(f"trivy image {flag} failed (exit {done.returncode})")
-        done = trivy(["version", "--format", "json"], env, capture=True)
+        with isolated() as apart:
+            for flag in DOWNLOADS:
+                if (done := trivy(["image", flag], env | apart)).returncode:
+                    raise CommandError(f"trivy image {flag} failed (exit {done.returncode})")
+            done = trivy(["version", "--format", "json"], env | apart, capture=True)
         if done.returncode:
             raise CommandError(f"trivy version failed (exit {done.returncode})")
         try:

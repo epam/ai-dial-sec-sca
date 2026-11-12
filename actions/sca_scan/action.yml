@@ -8,6 +8,9 @@ inputs:
   target-id:
     description: Id of the Trivy target to scan
     required: true
+  kind:
+    description: Kind of the target, fs (a source) or image
+    required: true
   tree:
     description: Directory with the checkout of a source target; empty for an image or if the checkout failed
     default: ""
@@ -50,7 +53,9 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # also after a failed step: the scan step below runs then too and must not fall back to the python of the runner
     - name: Set up Python
+      if: always()
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: "3.12"
@@ -140,6 +145,7 @@ runs:
         FAILED: ${{ inputs.failed }}
         TARGETS_FILE: ${{ inputs.targets-file }}
         TARGET_ID: ${{ inputs.target-id }}
+        KIND: ${{ inputs.kind }}
         TREE: ${{ inputs.tree }}
         PARTS_DIR: ${{ inputs.parts-dir }}
         CACHE_DIR: ${{ inputs.cache-dir }}
@@ -150,10 +156,11 @@ runs:
       run: |
         # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
         rm -rf "$OUTPUT_DIR"
+        # the install broke, or was skipped because a step before it broke: no Trivy
         if [ -z "$FAILED" ] && [ "$INSTALL_OUTCOME" != success ]; then
-          FAILED="trivy setup $INSTALL_OUTCOME"
+          FAILED="trivy setup failure"
         fi
-        args=(--targets-file "$TARGETS_FILE" --target-id "$TARGET_ID" --parts-dir "$PARTS_DIR" --cache-dir "$CACHE_DIR" --output-dir "$OUTPUT_DIR")
+        args=(--targets-file "$TARGETS_FILE" --target-id "$TARGET_ID" --kind "$KIND" --parts-dir "$PARTS_DIR" --cache-dir "$CACHE_DIR" --output-dir "$OUTPUT_DIR")
         # the optional arguments, as name:value; an empty value is left out
         for option in "tree:$TREE" "registry:$REGISTRY" "lockfiles:$LOCKFILES" "graph-dir:$GRAPH_DIR" "failed:$FAILED"; do
           if [ -n "${option#*:}" ]; then
