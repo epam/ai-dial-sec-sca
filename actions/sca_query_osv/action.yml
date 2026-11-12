@@ -1,5 +1,5 @@
 name: Query OSV for SCA scan packages
-description: Check the packages found by Trivy in the targets of an SCA scheduled scan against OSV (osv.dev) with osv-scanner; for image targets also a direct OSV image scan, which queries OSV about the OS packages of the image too
+description: Check the packages found by Trivy in the targets of an SCA scheduled scan against OSV (osv.dev) with osv-scanner; for image targets also a direct OSV image scan (the image pulled with crane, no Docker daemon), which queries OSV about the OS packages of the image too
 
 inputs:
   targets-file:
@@ -19,6 +19,15 @@ inputs:
     default: ""
   offline-db-dir:
     description: Directory with the osv-scanner offline databases, downloaded by the caller beforehand; given, both scans run offline (no network) against it. Empty means online
+    default: ""
+  registry:
+    description: Registry the images are pulled from; the credentials are used for it only, any other registry is anonymous
+    default: ""
+  registry-user:
+    description: Registry user; empty means anonymous
+    default: ""
+  registry-password:
+    description: Registry password or token; empty means anonymous
     default: ""
 
 runs:
@@ -45,7 +54,7 @@ runs:
       run: |
         # -P keeps the checked-out workspace off sys.path: it must not shadow the engine
         rm -rf "$OUT"
-        args=(--tools trivy,osv-scanner --dir "$TOOLS_DIR" --output-dir "$OUT")
+        args=(--tools trivy,osv-scanner,crane --dir "$TOOLS_DIR" --output-dir "$OUT")
         if [ -n "$TRIVY_VERSION" ]; then
           args+=(--trivy-version "$TRIVY_VERSION")
         fi
@@ -64,7 +73,7 @@ runs:
       with:
         path: ${{ steps.tools-key.outputs.downloads }}
         key: ${{ steps.tools-key.outputs.key }}
-    - name: Install Trivy and osv-scanner
+    - name: Install Trivy, osv-scanner and crane
       id: install
       shell: bash
       env:
@@ -76,7 +85,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         rm -rf "$OUT"
-        args=(--tools trivy,osv-scanner --dir "$TOOLS_DIR" --output-dir "$OUT")
+        args=(--tools trivy,osv-scanner,crane --dir "$TOOLS_DIR" --output-dir "$OUT")
         if [ -n "$TRIVY_VERSION" ]; then
           args+=(--trivy-version "$TRIVY_VERSION")
         fi
@@ -102,9 +111,14 @@ runs:
         SERVER_URL: ${{ github.server_url }}
         ACTION_PATH: ${{ github.action_path }}
       run: python "$ACTION_PATH/../_github/github_adapter.py" context
+    # The credentials are in the environment of this step only; the engine hands them to crane for an image of the
+    # registry and for nothing else
     - name: Query OSV
       shell: bash
       env:
+        SCA_REGISTRY_USER: ${{ inputs.registry-user }}
+        SCA_REGISTRY_PASSWORD: ${{ inputs.registry-password }}
+        REGISTRY: ${{ inputs.registry }}
         SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
         # the engine package sca, from the src layout of the action checkout
         PYTHONPATH: ${{ github.action_path }}/../../src
@@ -122,6 +136,9 @@ runs:
         )
         if [ -n "$OFFLINE_DB_DIR" ]; then
           args+=(--offline-db-dir "$OFFLINE_DB_DIR")
+        fi
+        if [ -n "$REGISTRY" ]; then
+          args+=(--registry "$REGISTRY")
         fi
         python -P -m sca osv "${args[@]}"
     # shows what the command wrote into its output directory: step outputs, job summary, annotations

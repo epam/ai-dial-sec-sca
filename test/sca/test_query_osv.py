@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sca.lib.context import UsageError
 from sca.osv import query_osv as qo
 
 NOW = datetime(2030, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -69,7 +71,7 @@ PACKAGES = (("npm", "lodash", "4.17.0"), ("PyPI", "requests", "2.0.0"))
 
 
 class FakeCommands:
-    """Stands in for ``trivy``, ``osv-scanner`` and ``docker``; records every command.
+    """Stands in for ``trivy``, ``crane`` and ``osv-scanner``; records every command.
 
     ``scanner_exit``/``scanner_output``: what osv-scanner does (an output of
     False writes nothing; a string is written as is).
@@ -85,7 +87,7 @@ class FakeCommands:
         image_exit: int | None = None,
         image_stderr: str | None = None,
         image_output: Any = None,
-        docker_exit: int = 0,
+        crane_exit: int = 0,
     ) -> None:
         self.bom = bom
         self.convert_exit = convert_exit
@@ -104,15 +106,30 @@ class FakeCommands:
             if image_output is None
             else image_output
         )
-        self.docker_exit = docker_exit
+        self.crane_exit = crane_exit
         self.calls: list[list[str]] = []
+        # what the pulls saw: (env, config.json text or None); whether the archive
+        # existed at each scan; the archive paths
+        self.pulls: list[tuple[dict[str, str], str | None]] = []
+        self.tars_scanned: list[bool] = []
+        self.tars: list[Path] = []
         self.scanned_boms: list[dict[str, Any]] = []
 
-    def __call__(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    def __call__(
+        self, command: Sequence[str], env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         command = list(command)
         self.calls.append(command)
-        if command[0] == "docker":
-            return subprocess.CompletedProcess(command, self.docker_exit, "", "")
+        if command[0] == "crane":
+            config = Path((env or {})["DOCKER_CONFIG"]) / "config.json"
+            self.pulls.append(
+                (dict(env or {}), config.read_text("utf-8") if config.exists() else None)
+            )
+            tar = Path(command[-1])
+            self.tars.append(tar)
+            if not self.crane_exit:
+                tar.write_bytes(b"tar")
+            return subprocess.CompletedProcess(command, self.crane_exit, "", "denied")
         if command[1] == "--version":
             out = "osv-scanner version: 2.6.0\nosv-scalibr version: 0.4.8\n"
             return subprocess.CompletedProcess(command, 0, out, "")
@@ -127,6 +144,7 @@ class FakeCommands:
             return subprocess.CompletedProcess(command, 0, "", "")
         output = Path(command[command.index("--output-file") + 1])
         if command[1:3] == ["scan", "image"]:
+            self.tars_scanned.append(Path(command[command.index("--archive") + 1]).exists())
             if self.image_output is not False:
                 output.write_text(json.dumps(self.image_output), encoding="utf-8")
             return subprocess.CompletedProcess(
@@ -148,8 +166,8 @@ class FakeCommands:
     def scans(self, kind: str = "source") -> list[list[str]]:
         return [c for c in self.calls if c[1:3] == ["scan", kind]]
 
-    def docker(self) -> list[list[str]]:
-        return [c for c in self.calls if c[0] == "docker"]
+    def cranes(self) -> list[list[str]]:
+        return [c for c in self.calls if c[0] == "crane"]
 
 
 class Workspace:
@@ -196,12 +214,18 @@ class Workspace:
             )
         self.tid = tid
 
-    def run(self, commands: FakeCommands, offline_db_dir: Path | None = None) -> None:
+    def run(
+        self,
+        commands: FakeCommands,
+        offline_db_dir: Path | None = None,
+        registry: str | None = None,
+    ) -> None:
         args = argparse.Namespace(
             targets_file=self.targets_file,
             parts_dir=self.parts_dir,
             output_dir=self.output_dir,
             offline_db_dir=offline_db_dir,
+            registry=registry,
         )
         qo.run_all(args, commands, NOW)
 
@@ -453,7 +477,10 @@ def test_an_image_target_is_scanned_by_bom_and_by_image(tmp_path: Path) -> None:
     ws.run(commands)
     bom, image = commands.scans("source")[0], commands.scans("image")[0]
     assert image[:3] == ["osv-scanner", "scan", "image"]
-    assert image[3] == "ghcr.io/example/app:development"
+    assert image[3] == "--archive"
+    assert commands.cranes() == [
+        ["crane", "pull", "--platform", "linux/amd64", "ghcr.io/example/app:development", image[4]]
+    ]
     assert "--all-packages" in image
     assert image[image.index("--format") + 1] == "json"
     # the image scan writes to its own file, not over the BOM output
@@ -468,13 +495,19 @@ def test_an_image_target_is_scanned_by_bom_and_by_image(tmp_path: Path) -> None:
     assert len(merged["results"]) == 2
     sources = {r["source"]["type"] for r in merged["results"]}
     assert sources == {"sbom"}
-    assert commands.docker() == [["docker", "image", "rm", image[3]]]
+    # the archive existed for the scan and is gone after it
+    assert commands.tars_scanned == [True]
+    assert not commands.tars[0].exists()
 
 
-def test_a_docker_image_rm_failure_does_not_fail_the_target(tmp_path: Path) -> None:
+def test_a_failed_pull_fails_the_target_and_runs_no_scan(tmp_path: Path) -> None:
     ws = image_workspace(tmp_path)
-    ws.run(FakeCommands(docker_exit=1))
-    assert ws.status()["status"] == "ok"
+    commands = FakeCommands(crane_exit=1)
+    ws.run(commands)
+    assert ws.status()["status"] == "failed"
+    assert ws.status()["reason"] == "crane pull failed (exit 1): denied"
+    assert commands.scans("image") == []
+    assert not commands.tars[0].exists()
 
 
 @pytest.mark.parametrize("exit_code", [2, 127])
@@ -488,7 +521,7 @@ def test_a_failed_image_scan_fails_the_target_even_with_a_good_bom(
     assert ws.status()["reason"] == (
         f"osv-scanner scan image failed (exit {exit_code}): pull failed"
     )
-    assert commands.docker() == [["docker", "image", "rm", "ghcr.io/example/app:development"]]
+    assert not commands.tars[0].exists()
 
 
 def test_an_image_scan_output_of_an_unexpected_shape_fails_the_target(
@@ -500,17 +533,15 @@ def test_an_image_scan_output_of_an_unexpected_shape_fails_the_target(
     assert "no valid results to merge" in ws.status()["reason"]
 
 
-def test_a_bom_query_that_fails_before_the_image_scan_runs_no_docker(
+def test_a_bom_query_that_fails_before_the_image_scan_pulls_nothing(
     tmp_path: Path,
 ) -> None:
-    # a failed convert or BOM query returns before scan image, so no image was
-    # pulled and docker image rm must not be called
     ws = image_workspace(tmp_path)
     commands = FakeCommands(convert_exit=2)
     ws.run(commands)
     assert ws.status()["status"] == "failed"
     assert commands.scans("image") == []
-    assert commands.docker() == []
+    assert commands.cranes() == []
 
 
 def test_the_image_scan_flag_skips_only_the_image_scan(tmp_path: Path) -> None:
@@ -519,7 +550,7 @@ def test_the_image_scan_flag_skips_only_the_image_scan(tmp_path: Path) -> None:
     ws.run(commands)
     assert len(commands.scans("source")) == 1
     assert commands.scans("image") == []
-    assert commands.docker() == []
+    assert commands.cranes() == []
     merged = json.loads(ws.result().read_text(encoding="utf-8"))
     assert len(merged["results"]) == 1
     assert ws.status()["status"] == "ok"
@@ -527,6 +558,80 @@ def test_the_image_scan_flag_skips_only_the_image_scan(tmp_path: Path) -> None:
         "osv image scan disabled for this repository (image too large for the "
         "runner disk): OS packages of the image are not checked by OSV"
     )
+
+
+# --- registry credentials ----------------------------------------------------
+
+SECRET = "s3cr3t-pass"
+GHCR = "ghcr.io"
+
+
+def with_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SCA_REGISTRY_USER", "robot")
+    monkeypatch.setenv("SCA_REGISTRY_PASSWORD", SECRET)
+    monkeypatch.setenv("DOCKER_CONFIG", "/inherited")
+
+
+def test_credentials_reach_crane_only_through_a_config_for_the_registry_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_credentials(monkeypatch)
+    ws = image_workspace(tmp_path)
+    commands = FakeCommands()
+    ws.run(commands, registry=GHCR)
+    env, config = commands.pulls[0]
+    auth = base64.b64encode(f"robot:{SECRET}".encode()).decode()
+    assert json.loads(config or "") == {"auths": {GHCR: {"auth": auth}}}
+    assert env["DOCKER_CONFIG"] != "/inherited"
+    assert SECRET not in json.dumps(commands.calls)
+    # nothing survives: the config directory is gone with the temporary directory
+    assert not Path(env["DOCKER_CONFIG"]).exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file modes")
+def test_the_config_file_of_the_credentials_is_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_credentials(monkeypatch)
+    modes: list[int] = []
+
+    class Spy(FakeCommands):
+        def __call__(self, command, env=None):  # type: ignore[no-untyped-def]
+            if command[0] == "crane":
+                modes.append((Path(env["DOCKER_CONFIG"]) / "config.json").stat().st_mode & 0o777)
+            return super().__call__(command, env)
+
+    image_workspace(tmp_path).run(Spy(), registry=GHCR)
+    assert modes == [0o600]
+
+
+@pytest.mark.parametrize("registry", [None, "registry.example.com"])
+def test_another_registry_is_pulled_anonymously_with_an_empty_docker_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry: str | None
+) -> None:
+    with_credentials(monkeypatch)
+    commands = FakeCommands()
+    image_workspace(tmp_path).run(commands, registry=registry)
+    env, config = commands.pulls[0]
+    assert config is None
+    assert env["DOCKER_CONFIG"] != "/inherited"
+
+
+@pytest.mark.parametrize("registry", ["ghcr", "ghcr.io/org"])
+def test_a_registry_that_is_not_a_host_is_refused(
+    tmp_path: Path, registry: str
+) -> None:
+    with pytest.raises(UsageError):
+        image_workspace(tmp_path).run(FakeCommands(), registry=registry)
+
+
+def test_half_credentials_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SCA_REGISTRY_USER", "robot")
+    monkeypatch.delenv("SCA_REGISTRY_PASSWORD", raising=False)
+    with pytest.raises(UsageError):
+        image_workspace(tmp_path).run(FakeCommands(), registry=GHCR)
 
 
 # --- offline mode -------------------------------------------------------------
