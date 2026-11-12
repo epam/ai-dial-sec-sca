@@ -47,7 +47,7 @@ def execute(
         status, outputs = body(notes)
         code = 0
     except CommandError as error:
-        message, code = str(error), error.code
+        message, code, outputs = str(error), error.code, error.outputs
         note(notes, "error", message, error.title or f"sca {command} failed")
         print(f"error: {message}", file=sys.stderr)
     except Exception as error:

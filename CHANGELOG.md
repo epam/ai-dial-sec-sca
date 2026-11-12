@@ -11,6 +11,8 @@ Action inputs and outputs are unchanged.
 - `host` in `targets.json` and `report.json`.
 - `sca tools install`: installs Trivy v0.75.0, osv-scanner v2.7.0, oras v1.3.4 and crane v0.22.1 (Linux amd64 and arm64) from one pin table (`src/sca/tools/pins.py`); the sha256 is verified on every run, also of a cached download. `DIR/downloads` keeps the verified artifacts, `DIR/bin` is recreated on every run with only the binaries placed from them. Another Trivy version needs `--trivy-sha256`. `sca tools key` prints the cache key of the downloads.
 - `actions/sca_tools`: the public action around it (inputs `tools`, `trivy-version`, `trivy-sha256`, `dir`; output `dir`, the absolute `bin` directory); only `bin` is on `PATH` afterwards.
+- `sca db` and `actions/sca_db`: download the Trivy vulnerability and Java databases (repositories from the arguments, `TRIVY_DB_REPOSITORY` / `TRIVY_JAVA_DB_REPOSITORY` or the defaults of the engine) and describe the snapshot (`db-info.json`, output `db-info`), in place of the `trivy-db` job steps of `sca_scheduled.yml`. The handoff of the databases to the scan jobs stays with the caller.
+- `sca scan` and `actions/sca_scan`: scan one target with Trivy and write its parts (`trivy/<id>.json`, `.status.json`, `.txt`, `.trivyignore`, `.gradle-graph/`), in place of the scan steps of the `trivy` job of `sca_scheduled.yml`. The scan settings are owned by the engine, a failed scan (or any exception) leaves a `failed` status and exits 1. Registry credentials are `SCA_REGISTRY_USER` and `SCA_REGISTRY_PASSWORD` (inputs `registry-user`, `registry-password`), given to Trivy through its environment for an image of `--registry` only; the `docker login` of the workflow is not needed.
 
 ### Changed
 
