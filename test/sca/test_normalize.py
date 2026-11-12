@@ -166,7 +166,7 @@ def test_gradle_chain_comes_from_the_graph_of_the_project(tmp_path):
         {"g:app:1": ["g:lib:1"], "g:lib:1": ["g:leaf:1", "other:x:1"], "g:leaf:1": []},
     )
     native = gradle_native()
-    apply_gradle_graph("source-development", native, graph_dir)
+    apply_gradle_graph("source-development", native, graph_dir, [])
     findings = {}
     normalize_trivy("source-development", native, findings, {})
     row = next(iter(findings.values()))
@@ -174,21 +174,28 @@ def test_gradle_chain_comes_from_the_graph_of_the_project(tmp_path):
     assert row["relationship"] == "indirect"
 
 
-def test_gradle_without_a_graph_for_the_project_has_no_chain(tmp_path, capsys):
+def test_gradle_without_a_graph_for_the_project_has_no_chain(tmp_path):
     write_graph(tmp_path / "graph", "other", ["g:app:1"], {"g:app:1": []})
     native = gradle_native()
-    apply_gradle_graph("source-development", native, tmp_path / "graph")
+    notes = []
+    apply_gradle_graph("source-development", native, tmp_path / "graph", notes)
     findings = {}
     normalize_trivy("source-development", native, findings, {})
     assert next(iter(findings.values()))["chain"] == []
-    assert "No Gradle dependency graph" in capsys.readouterr().out
+    (warning,) = notes
+    assert (warning["level"], warning["title"], warning["target"]) == (
+        "warning",
+        "No Gradle dependency graph",
+        "source-development",
+    )
 
 
-def test_an_unreadable_graph_file_is_skipped_with_a_warning(tmp_path, capsys):
+def test_an_unreadable_graph_file_is_skipped_with_a_warning(tmp_path):
     (tmp_path / "graph").mkdir()
     (tmp_path / "graph" / "graph-x.json").write_text("{not json")
-    apply_gradle_graph("source-development", gradle_native(), tmp_path / "graph")
-    assert "Gradle dependency graph ignored" in capsys.readouterr().out
+    notes = []
+    apply_gradle_graph("source-development", gradle_native(), tmp_path / "graph", notes)
+    assert "Gradle dependency graph ignored" in [n["title"] for n in notes]
 
 
 def test_an_image_package_borrows_the_chain_of_the_source_not_its_dev_flag():

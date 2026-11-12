@@ -1,7 +1,6 @@
 """versions[] of report.json: statuses, vulnerability records and counts."""
 
 import pytest
-from merge_results import engine_ref
 from sca_rules import norm
 from test_summary import finding, report, sample, target, two_versions
 from vulns import (
@@ -359,25 +358,6 @@ def test_the_counts_of_the_sample_versions_are_pinned():
     new, old = records["1.2.9"]["counts"], records["1.1.15"]["counts"]
     assert (new["h"], new["m"], new["fixable"]) == (1, 1, 1)
     assert (old["h"], old["l"]) == (1, 1)
-
-
-# --- header ---
-
-
-@pytest.mark.parametrize(
-    "path, ref",
-    [
-        ("/w/_actions/epam/ai-dial-sec-sca/v0.7.0/actions/m", "v0.7.0"),
-        ("/w/_actions/epam/ai-dial-sec-sca/feat/x/actions/m", "feat/x"),
-        ("/w/_actions/epam/ai-dial-sec-sca/actions/m", None),
-        (r"D:\a\_actions\epam\ai-dial-sec-sca\main\actions\m", "main"),
-        ("/home/me/ai-dial-sec-sca/actions/sca_merge_results", None),
-        ("", None),
-        (None, None),
-    ],
-)
-def test_engine_ref(path, ref):
-    assert engine_ref(path) == ref
 
 
 # --- record attributes: aliases, ecosystem, relationship, locations ---

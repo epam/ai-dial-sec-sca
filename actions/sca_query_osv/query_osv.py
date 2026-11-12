@@ -28,7 +28,8 @@ is a failure, so a broken run never looks like a clean one - a failed image scan
 its target even though the BOM query succeeded. A command has a timeout (a hung one is
 exit code 124, a failed target with that reason). A target whose Trivy target was not
 scanned is ``not_applicable``. The merge fails an output that is not a valid result.
-The script exits 0: the workflow decides about failing the run.
+The script exits 0: the workflow decides about failing the run. It writes
+``outputs.json`` (no output values) and ``annotations.json`` into the output directory.
 
 With ``--offline-db-dir DIR`` osv-scanner makes no OSV or deps.dev network request (the image pull of an image scan still happens): ``DIR`` is the osv-scanner
 database cache (``OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY``), filled by the caller beforehand
@@ -49,6 +50,7 @@ import argparse
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -56,6 +58,7 @@ from pathlib import Path
 from typing import Any
 
 from _sca_lib import dump_json, format_time, read_json
+from _sca_lib.outputs import Annotations, execute
 
 # Components Trivy covers with its distribution feeds
 OS_PURL_TYPES = frozenset({"deb", "apk", "rpm"})
@@ -293,7 +296,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--targets-file", required=True, type=Path)
     parser.add_argument("--parts-dir", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--output-dir", default=Path("out"), type=Path)
     parser.add_argument(
         "--offline-db-dir",
         type=Path,
@@ -302,5 +305,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    def body(_notes: Annotations) -> tuple[str, dict[str, Any]]:
+        run_all(args, run_command, datetime.now(UTC))
+        return "ok", {}
+
+    return execute("osv", args.output_dir, body)
+
+
 if __name__ == "__main__":
-    run_all(parse_args(), run_command, datetime.now(UTC))
+    sys.exit(main())

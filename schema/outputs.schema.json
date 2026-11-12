@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SCA outputs.json (K1)",
+  "description": "out/outputs.json of every `sca` and `sca-notifier` command: the values an adapter reads in place of GITHUB_OUTPUT. Written whenever the output directory is writable, also on failure.",
+  "type": "object",
+  "required": ["contract", "command", "status", "outputs"],
+  "properties": {
+    "contract": {"const": 1},
+    "command": {"enum": ["targets", "db", "scan", "osv", "merge", "plan", "fix-prepare", "run", "tools-install", "collect", "digest"]},
+    "status": {"enum": ["ok", "failed_targets", "error"], "description": "ok = exit 0; failed_targets = exit 0 (merge only), outputs complete; error = exit 1 or 2, outputs may be partial."},
+    "engine": {"type": ["string", "null"], "description": "Engine or notifier ref that ran."},
+    "message": {"type": ["string", "null"], "description": "Error text when status is error."},
+    "outputs": {"type": "object", "description": "Named values of the command (K1, section 4). Keys keep the names of today's action outputs (matrix, targets-file, failed-count)."}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SCA annotations.json (K1)",
+  "description": "out/annotations.json: messages for the CI UI. The adapter renders them (GitHub ::error::, Azure ##vso, plain log); the engine prints no platform syntax.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["level", "message"],
+    "properties": {
+      "level": {"enum": ["notice", "warning", "error"]},
+      "message": {"type": "string"},
+      "title": {"type": ["string", "null"], "description": "Short heading (today the title= of a GitHub annotation)."},
+      "target": {"type": ["string", "null"], "description": "Target id the message is about, else null."}
+    }
+  }
+}

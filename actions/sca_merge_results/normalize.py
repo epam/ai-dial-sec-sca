@@ -18,7 +18,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from _sca_lib import escape_command_data, read_json
+from _sca_lib import read_json
+from _sca_lib.outputs import Annotations, note
 from sca_rules import norm
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
@@ -65,10 +66,12 @@ def add_finding(findings: Findings, row: Finding) -> None:
 # ---------------------------------------------------------------- Gradle graph
 
 
-def load_gradle_graphs(graph_dir: Path, tid: str) -> dict[str, tuple[set, dict]]:
+def load_gradle_graphs(
+    graph_dir: Path, tid: str, notes: Annotations
+) -> dict[str, tuple[set, dict]]:
     """The graph files written by lockfiles.init.gradle: project dir -> (direct
     modules, module -> modules it depends on), united over all configurations. A file
-    that cannot be read is skipped with a warning.
+    that cannot be read is skipped with a warning in ``notes``.
     """
     graphs: dict[str, tuple[set[str], dict[str, set[str]]]] = {}
     for path in sorted(graph_dir.glob("*.json")):
@@ -82,28 +85,34 @@ def load_gradle_graphs(graph_dir: Path, tid: str) -> dict[str, tuple[set, dict]]
                     edges.setdefault(module, set()).update(deps)
             graphs[posixpath.normpath(data["project_dir"])] = (direct, edges)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
-            print(
-                "::warning title=Gradle dependency graph ignored::"
-                + escape_command_data(f"{tid}: {path.name}: {e!r}")
+            note(
+                notes,
+                "warning",
+                f"{tid}: {path.name}: {e!r}",
+                "Gradle dependency graph ignored",
+                tid,
             )
     return graphs
 
 
-def apply_gradle_graph(tid: str, native: Mapping[str, Any], graph_dir: Path) -> None:
+def apply_gradle_graph(
+    tid: str, native: Mapping[str, Any], graph_dir: Path, notes: Annotations
+) -> None:
     """Fill ``Relationship`` and ``DependsOn`` of the packages of the gradle Results
     of an fs scan (a lockfile has no graph), in memory: ``_native/`` stays as is.
     """
     results = [r for r in native.get("Results") or [] if r.get("Type") == "gradle"]
-    graphs = load_gradle_graphs(graph_dir, tid) if results else {}
+    graphs = load_gradle_graphs(graph_dir, tid, notes) if results else {}
     for result in results:
         graph = graphs.get(posixpath.normpath(posixpath.dirname(result["Target"])))
         if graph is None:
-            print(
-                "::warning title=No Gradle dependency graph::"
-                + escape_command_data(
-                    f"{tid}: {result['Target']} has no dependency graph, "
-                    "so its findings have no chains"
-                )
+            note(
+                notes,
+                "warning",
+                f"{tid}: {result['Target']} has no dependency graph, "
+                "so its findings have no chains",
+                "No Gradle dependency graph",
+                tid,
             )
             continue
         direct, edges = graph

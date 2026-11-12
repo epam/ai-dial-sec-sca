@@ -19,6 +19,15 @@ runs:
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: "3.12"
+    # the GitHub values the commands cannot read themselves: the host and the ref this action runs from
+    - name: Resolve the run context
+      id: context
+      shell: bash
+      env:
+        SERVER_URL: ${{ github.server_url }}
+        ACTION_PATH: ${{ github.action_path }}
+        PYTHONPATH: ${{ github.action_path }}/..
+      run: python -m _sca_lib.github context
     - name: Plan the fixes
       shell: bash
       env:
@@ -26,6 +35,17 @@ runs:
         REPORTS: ${{ inputs.reports }}
         CONFIG: ${{ inputs.config }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
+        SCA_RUN_ENGINE_REF: ${{ steps.context.outputs.engine-ref }}
       run: |
         mapfile -t reports < <(printf '%s\n' "$REPORTS" | sed '/^[[:space:]]*$/d')
-        PYTHONPATH="$ACTION_PATH:$ACTION_PATH/../sca_rules" python -m sca_fix_plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
+        PYTHONPATH="$ACTION_PATH:$ACTION_PATH/..:$ACTION_PATH/../sca_rules" python -m sca_fix_plan --reports "${reports[@]}" --config "$CONFIG" --output-dir "$OUTPUT_DIR"
+    # shows what the command wrote into its output directory: step outputs, job summary, annotations
+    - name: Report the results
+      id: report
+      if: always()
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        SCA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        PYTHONPATH: ${{ github.action_path }}/..
+      run: python -m _sca_lib.github render "$OUTPUT_DIR"

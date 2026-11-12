@@ -16,22 +16,27 @@ Outputs (in the output directory):
   * ``report.json`` - the targets with their status, the flat list of findings (see
     ``normalize`` for the rows) and the versions with their vulnerability records
     (see ``vulns``);
-  * ``summary.md`` - the human-readable layer (see ``summary``), also appended to the
-    job summary;
+  * ``summary.md`` - the human-readable layer (see ``summary``);
+  * ``outputs.json`` (``failed-count``, ``report-file``) and ``annotations.json`` (the
+    failed targets and other warnings), see ``_sca_lib.outputs``;
   * ``_native/<scanner>/<id>.json|txt|trivyignore`` - the unmodified per-target
     results (audit).
 
 A scan that broke is reported as ``failed`` and never looks like a clean target. The
-script still exits 0 once the outputs are written: the workflow decides about
-failing the run after the artifact has been uploaded.
+script still exits 0 once the outputs are written (``status: failed_targets`` in
+``outputs.json``): the workflow decides about failing the run after the artifact has
+been uploaded.
+
+The run context (``SCA_RUN_*``, see ``_sca_lib.context``) gives the ``host``, the
+attempt and, unless ``--engine-ref`` says otherwise, the ``engine`` of the report.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
+import sys
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,7 +52,9 @@ except ImportError as error:
         f"contains the sca_rules package) on PYTHONPATH ({error})"
     ) from error
 
-from _sca_lib import append_text, dump_json, escape_command_data, format_time, read_json
+from _sca_lib import dump_json, format_time, read_json
+from _sca_lib.context import read_run_context
+from _sca_lib.outputs import Annotations, execute, note
 from ignores import add_acceptances, add_ignores
 from normalize import (
     Findings,
@@ -58,21 +65,10 @@ from normalize import (
     normalize_osv,
     normalize_trivy,
 )
-from summary import build_summary, truncate_summary
+from summary import build_summary
 from vulns import build_versions
 
 SCHEMA_VERSION = 4
-
-
-def engine_ref(action_path: str | None) -> str | None:
-    """The ref of the action in a runner path ``.../_actions/<owner>/<repo>/<ref>/
-    actions/<action>`` (a branch ref with a slash is nested directories); None
-    outside Actions (a local run).
-    """
-    parts = (action_path or "").replace("\\", "/").split("/")
-    if "_actions" not in parts:
-        return None
-    return "/".join(parts[parts.index("_actions") + 3 : -2]) or None
 
 
 def load_target_result(
@@ -144,8 +140,14 @@ def run_merge(
     trivy_db: Mapping[str, str],
     engine: str | None = None,
     run_attempt: int | None = None,
+    *,
+    host: str,
+    notes: Annotations,
 ) -> tuple[dict[str, Any], str]:
-    """Write all outputs; return the report and the summary."""
+    """Write ``report.json`` and ``summary.md`` and add the warnings to ``notes``;
+    return the report and the summary. ``host`` is the one of ``targets.json`` if it
+    has one.
+    """
     doc = read_json(targets_file)
     entries: list[dict[str, Any]] = []
     natives: dict[tuple[str, str], tuple[Any, dict[str, Any]]] = {}
@@ -159,7 +161,7 @@ def run_merge(
                 shutil.copyfile(parts / f"{tid}{suffix}", native_dir / f"{tid}{suffix}")
         state, native, status = load_target_result(target, parts)
         if native is not None and scanner == "trivy" and target["kind"] == "fs":
-            apply_gradle_graph(tid, native, parts / f"{tid}.gradle-graph")
+            apply_gradle_graph(tid, native, parts / f"{tid}.gradle-graph", notes)
         entries.append(
             {
                 "id": tid,
@@ -209,9 +211,12 @@ def run_merge(
             continue
         findings.update(found)
         if entry["packages_scanned"] == 0:
-            print(
-                "::warning title=No packages in scan result::"
-                + escape_command_data(f"{tid} ({scanner}): 0 packages were seen")
+            note(
+                notes,
+                "warning",
+                f"{tid} ({scanner}): 0 packages were seen",
+                "No packages in scan result",
+                tid,
             )
         if scanner == "trivy":
             inventories[tid] = inventory
@@ -244,6 +249,7 @@ def run_merge(
         "schema_version": SCHEMA_VERSION,
         "engine": engine,
         "repo": doc["repo"],
+        "host": doc.get("host") or host,
         "commit_sha": doc["commit_sha"],
         "default_branch": doc["default_branch"],
         "run_id": doc["run_id"],
@@ -279,7 +285,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--targets-file", required=True, type=Path)
     parser.add_argument("--parts-dir", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--output-dir", default=Path("out"), type=Path)
     parser.add_argument(
         "--trivy-db-info",
         default="",
@@ -287,39 +293,48 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--engine-ref",
-        default=os.environ.get("SCA_ENGINE_REF", ""),
-        help="ref of the engine for the report; default: derived from ACTION_PATH",
+        default="",
+        help="ref of the engine for the report; default: SCA_RUN_ENGINE_REF",
     )
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> None:
+def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    trivy_db = json.loads(args.trivy_db_info) if args.trivy_db_info.strip() else {}
-    action_path = os.environ.get("ACTION_PATH")
-    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
-    report, summary = run_merge(
-        args.targets_file,
-        args.parts_dir,
-        args.output_dir,
-        format_time(datetime.now(UTC)),
-        trivy_db,
-        args.engine_ref or engine_ref(action_path),
-        int(attempt) if attempt.isdigit() else None,
-    )
-    failed = [e for e in report["targets"] if e["status"] == "failed"]
-    for entry in failed:
-        name = f"{entry['id']} ({entry['scanner']})"
-        print(
-            "::error title=Scan target failed::"
-            + escape_command_data(f"{name}: {entry['reason']}")
+
+    def body(notes: Annotations) -> tuple[str, dict[str, Any]]:
+        context = read_run_context()
+        trivy_db = json.loads(args.trivy_db_info) if args.trivy_db_info.strip() else {}
+        report, _ = run_merge(
+            args.targets_file,
+            args.parts_dir,
+            args.output_dir,
+            format_time(datetime.now(UTC)),
+            trivy_db,
+            args.engine_ref or context.engine_ref,
+            context.attempt,
+            host=context.host,
+            notes=notes,
         )
-    print(f"{len(report['findings'])} findings; {len(failed)} failed target(s)")
-    if step_summary := os.environ.get("GITHUB_STEP_SUMMARY"):
-        append_text(step_summary, truncate_summary(summary, report["run_url"]))
-    if github_output := os.environ.get("GITHUB_OUTPUT"):
-        append_text(github_output, f"failed-count={len(failed)}\n")
+        failed = [e for e in report["targets"] if e["status"] == "failed"]
+        for entry in failed:
+            name = f"{entry['id']} ({entry['scanner']})"
+            note(
+                notes,
+                "error",
+                f"{name}: {entry['reason']}",
+                "Scan target failed",
+                entry["id"],
+            )
+        print(f"{len(report['findings'])} findings; {len(failed)} failed target(s)")
+        outputs = {
+            "failed-count": len(failed),
+            "report-file": str(args.output_dir / "report.json"),
+        }
+        return ("failed_targets" if failed else "ok"), outputs
+
+    return execute("merge", args.output_dir, body, args.engine_ref or None)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

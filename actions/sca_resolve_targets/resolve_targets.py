@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Resolve the scan targets (source snapshot + container images) of one repository.
 
-Used by the SCA scheduled scan. Asks the GitHub REST API through ``gh api`` and the
-image registry through ``oras repo tags`` (both are on the runner). Standard library
-only.
+Used by the SCA scheduled scan. Asks the GitHub REST API through ``gh api`` (token in
+``GH_TOKEN``) and the image registry through ``oras repo tags`` (both are on the
+runner). Standard library only. The run (host, run id, URL, event, actor) comes from
+the ``SCA_RUN_*`` environment, see ``_sca_lib.context``. Writes ``targets.json``,
+``outputs.json`` (``matrix``, ``targets-file``) and ``annotations.json`` into the
+output directory.
 
 Every call of an external tool goes through a ``Runner`` (a callable
 ``(argv, stdin) -> stdout``), so the logic can be tested with a fake runner and no
@@ -12,6 +15,7 @@ network.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -25,7 +29,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from _sca_lib import append_text, dump_json, escape_command_data
+from _sca_lib import dump_json
+from _sca_lib.context import CommandError, RunContext, UsageError, read_run_context
+from _sca_lib.outputs import Annotations, execute, note
 
 GITHUB_API_VERSION = "2022-11-28"
 GHCR_HOST = "ghcr.io"
@@ -100,6 +106,7 @@ class GitHubClient:
 
     def __init__(self, run: Runner) -> None:
         self._run = run
+        self.notes: Annotations = []  # what the calls found worth telling
 
     def _get(self, path: str, missing_ok: bool = False) -> Any:
         """The JSON response of GET ``path``; None for HTTP 404 if ``missing_ok``."""
@@ -134,9 +141,11 @@ class GitHubClient:
             releases += batch
             if len(batch) < RELEASES_PER_PAGE:
                 return releases
-        print(
-            f"::warning title=Release list truncated::the release set is built "
-            f"from the newest {len(releases)} releases"
+        note(
+            self.notes,
+            "warning",
+            f"the release set is built from the newest {len(releases)} releases",
+            "Release list truncated",
         )
         return releases
 
@@ -458,7 +467,6 @@ class Inputs:
     """The inputs of the action (see ``action.yml``) and the calling workflow run."""
 
     repository: str
-    caller_repository: str
     registry: str = GHCR_HOST
     images: Sequence[str] = ()
     image_scan: bool = True
@@ -468,33 +476,30 @@ class Inputs:
     force_image_scan: bool = False
 
     @classmethod
-    def from_environ(cls, environ: Mapping[str, str]) -> Inputs:
-        """Read the inputs, which the action passes as environment variables
-        (``REPOSITORY``, ``IMAGES``, ...)."""
-        repository = environ["REPOSITORY"]
-        if not REPOSITORY_NAME.fullmatch(repository):
-            raise ResolveError(f"repository must be 'owner/name', got {repository!r}")
+    def from_args(cls, args: argparse.Namespace, token: str | None) -> Inputs:
+        """Read the arguments of the command (``parse_args``) and the API token."""
+        if not REPOSITORY_NAME.fullmatch(args.repository):
+            raise UsageError(
+                f"repository must be 'owner/name', got {args.repository!r}"
+            )
 
-        raw_lines = (environ.get("RELEASE_LINES") or "2").strip()
+        raw_lines = (args.release_lines or "2").strip()
         try:
             release_lines = int(raw_lines)
         except ValueError:
-            raise ResolveError(
+            raise UsageError(
                 f"release-lines must be a number, got {raw_lines!r}"
             ) from None
 
         return cls(
-            repository=repository,
-            caller_repository=environ["GITHUB_REPOSITORY"],
-            registry=environ.get("REGISTRY") or GHCR_HOST,
-            images=tuple(parse_images(environ.get("IMAGES", ""))),
-            image_scan=(environ.get("IMAGE_SCAN") or "true").strip().lower()
-            not in ("false", "0", "no"),
+            repository=args.repository,
+            registry=args.registry or GHCR_HOST,
+            images=tuple(parse_images(args.images)),
+            image_scan=args.osv_image_scan.strip().lower() not in ("false", "0", "no"),
             release_lines=max(release_lines, 1),
-            token=environ.get("GITHUB_TOKEN") or None,
-            scan_tag=(environ.get("SCAN_TAG") or "").strip() or None,
-            force_image_scan=(environ.get("FORCE_IMAGE_SCAN") or "").strip().lower()
-            == "true",
+            token=token,
+            scan_tag=args.scan_tag.strip() or None,
+            force_image_scan=args.force_image_scan.strip().lower() == "true",
         )
 
 
@@ -512,12 +517,12 @@ def resolve_release_targets(
     release_set = resolve_release_set(github, repository, release_lines)
     if release_set.unmatched:
         newest = max(release_set.unmatched, key=lambda r: r.published_at)
-        print(
-            "::notice title=Releases outside the X.Y.Z lines::"
-            + escape_command_data(
-                f"{len(release_set.unmatched)} stable release(s) not scanned, "
-                f"the tag is not X.Y.Z (newest: {newest.tag})"
-            )
+        note(
+            github.notes,
+            "notice",
+            f"{len(release_set.unmatched)} stable release(s) not scanned, "
+            f"the tag is not X.Y.Z (newest: {newest.tag})",
+            "Releases outside the X.Y.Z lines",
         )
     if (
         not release_set.stables
@@ -550,7 +555,7 @@ def resolve_targets(
     inputs: Inputs,
     github: GitHubClient,
     registry: RegistryClient,
-    environ: Mapping[str, str],
+    context: RunContext,
 ) -> dict[str, Any]:
     """Build the targets.json document. Raises ResolveError without a snapshot.
 
@@ -590,25 +595,15 @@ def resolve_targets(
     targets.extend([make_osv_target(t, image_scan_disabled=disabled) for t in targets])
     check_unique_ids(targets)
 
-    missing = [
-        name
-        for name in ("GITHUB_RUN_ID", "GITHUB_EVENT_NAME", "GITHUB_TRIGGERING_ACTOR")
-        if not environ.get(name)
-    ]
-    if missing:
-        raise ResolveError(f"missing environment variable(s): {', '.join(missing)}")
-    run_id = environ["GITHUB_RUN_ID"]
-    event = environ["GITHUB_EVENT_NAME"]
-    actor = environ["GITHUB_TRIGGERING_ACTOR"]
-    run_url = f"{environ['GITHUB_SERVER_URL']}/{inputs.caller_repository}"
     return {
         "repo": repository,
+        "host": context.host,
         "default_branch": default_branch,
         "commit_sha": commit_sha,
-        "run_id": run_id,
-        "run_url": f"{run_url}/actions/runs/{run_id}",
-        "event": event,
-        "actor": actor,
+        "run_id": context.run_id,
+        "run_url": context.url,
+        "event": context.event,
+        "actor": context.actor,
         **({"scan_ref": inputs.scan_tag} if inputs.scan_tag else {}),
         **({"forced_image_scan": True} if forced else {}),
         "targets": targets,
@@ -639,9 +634,9 @@ def render_table(targets: Sequence[Mapping[str, Any]]) -> str:
     )
 
 
-def annotations(targets: Sequence[Mapping[str, Any]]) -> list[str]:
+def annotations(targets: Sequence[Mapping[str, Any]]) -> Annotations:
     """Annotations of the Trivy targets; an OSV twin only mirrors its Trivy target."""
-    lines = []
+    notes: Annotations = []
     for target in targets:
         if target["scanner"] != "trivy":
             continue
@@ -651,26 +646,33 @@ def annotations(targets: Sequence[Mapping[str, Any]]) -> list[str]:
             level, what = "warning", "failed to resolve"
         else:
             continue
-        lines.append(
-            f"::{level} title=Scan target {target['id']} {what}"
-            f"::{escape_command_data(target['reason'])}"
-        )
-    return lines
+        title = f"Scan target {target['id']} {what}"
+        note(notes, level, target["reason"], title, target["id"])
+    return notes
 
 
-def run(environ: Mapping[str, str], runner: Runner | None = None) -> None:
-    inputs = Inputs.from_environ(environ)
+def run(
+    args: argparse.Namespace,
+    environ: Mapping[str, str],
+    notes: Annotations,
+    runner: Runner | None = None,
+) -> tuple[str, dict[str, Any]]:
+    context = read_run_context(environ)
+    inputs = Inputs.from_args(args, environ.get("GH_TOKEN") or None)
     run_tool = runner or make_runner(inputs.token)
-    targets_doc = resolve_targets(
-        inputs,
-        GitHubClient(run_tool),
-        RegistryClient(run_tool, inputs.registry, inputs.token),
-        environ,
-    )
+    github = GitHubClient(run_tool)
+    try:
+        targets_doc = resolve_targets(
+            inputs,
+            github,
+            RegistryClient(run_tool, inputs.registry, inputs.token),
+            context,
+        )
+    except ResolveError as err:
+        raise CommandError(str(err), title="Scan target resolution failed") from err
 
-    output_dir = Path(environ["OUTPUT_DIR"])
-    output_dir.mkdir(parents=True, exist_ok=True)
-    targets_file = output_dir / "targets.json"
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    targets_file = args.output_dir / "targets.json"
     dump_json(targets_file, targets_doc)
 
     print(
@@ -678,23 +680,31 @@ def run(environ: Mapping[str, str], runner: Runner | None = None) -> None:
         f"({targets_doc['commit_sha']})"
     )
     print(render_table(targets_doc["targets"]))
-    for line in annotations(targets_doc["targets"]):
-        print(line)
+    notes += [*github.notes, *annotations(targets_doc["targets"])]
+    return "ok", {
+        "matrix": build_matrix(targets_doc),
+        "targets-file": str(targets_file),
+    }
 
-    if output_path := environ.get("GITHUB_OUTPUT"):
-        matrix = json.dumps(build_matrix(targets_doc), separators=(",", ":"))
-        append_text(output_path, f"matrix={matrix}\ntargets-file={targets_file}\n")
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument("--repository", required=True, help="owner/name")
+    parser.add_argument("--registry", default=GHCR_HOST)
+    parser.add_argument("--images", default="", help="image names, one per line")
+    parser.add_argument("--osv-image-scan", default="true", help="true or false")
+    parser.add_argument("--force-image-scan", default="false", help="true or false")
+    parser.add_argument("--release-lines", default="2")
+    parser.add_argument("--scan-tag", default="")
+    parser.add_argument("--output-dir", default=Path("out"), type=Path)
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    try:
-        run(os.environ)
-    except ResolveError as err:
-        print(
-            f"::error title=Scan target resolution failed::{escape_command_data(err)}"
-        )
-        return 1
-    return 0
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    return execute(
+        "targets", args.output_dir, lambda notes: run(args, os.environ, notes)
+    )
 
 
 if __name__ == "__main__":

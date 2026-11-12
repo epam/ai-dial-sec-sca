@@ -11,6 +11,7 @@ from merge_results import run_merge
 from test_merge_results import DB, osv_native, target
 
 NOW = "2026-10-14T00:00:00Z"
+HOST = "github.com"
 GOLDEN = Path(__file__).parent / "golden" / "report.json"
 GOLDEN_SCAN_TAG = Path(__file__).parent / "golden" / "report_scan_tag.json"
 
@@ -126,7 +127,15 @@ def merged(tmp_path: Path, header: dict | None = None) -> bytes:
     )
     (osv / "source-development.json").write_text(json.dumps(osv_native()))
     (osv / "source-development.status.json").write_text(json.dumps({"status": "ok"}))
-    run_merge(tmp_path / "targets.json", tmp_path / "parts", tmp_path / "out", NOW, DB)
+    run_merge(
+        tmp_path / "targets.json",
+        tmp_path / "parts",
+        tmp_path / "out",
+        NOW,
+        DB,
+        host=HOST,
+        notes=[],
+    )
     return (tmp_path / "out" / "report.json").read_bytes()
 
 
@@ -154,15 +163,25 @@ def merged_scan_tag(tmp_path: Path) -> bytes:
     (trivy / "source-1.0.0.trivyignore").write_text(
         "# reason\nCVE-2026-1 exp:2099-01-01\n"
     )
-    run_merge(tmp_path / "targets.json", tmp_path / "parts", tmp_path / "out", NOW, DB)
+    run_merge(
+        tmp_path / "targets.json",
+        tmp_path / "parts",
+        tmp_path / "out",
+        NOW,
+        DB,
+        host=HOST,
+        notes=[],
+    )
     return (tmp_path / "out" / "report.json").read_bytes()
 
 
 def without_rule_fields(raw: bytes, scratch: Path) -> bytes:
-    """``report.json`` without the ``upgrades`` and ``dev_state`` of its records (the
-    v0.8.0 bytes of a report that has every other field), in the engine's own dump format.
+    """``report.json`` without the ``host`` and the ``upgrades`` and ``dev_state`` of its
+    records (the v0.8.0 bytes of a report that has every other field), in the engine's own
+    dump format.
     """
     report = json.loads(raw)
+    del report["host"]
     for version in report["versions"]:
         for record in version["vulns"]:
             del record["upgrades"], record["dev_state"]
@@ -174,10 +193,12 @@ def as_before(raw: bytes, scratch: Path) -> bytes:
     """``report.json`` as the engine wrote it before the fields of the report
     additions: ``src_pkg`` and ``summary`` of the findings, ``role`` of a version,
     ``pkg_key`` and ``src_pkg`` of a vulnerability record and a package, ``title``
-    of a record, ``upgrades`` and ``dev_state`` of a record, removed. Same key order
+    of a record, ``upgrades`` and ``dev_state`` of a record, and the ``host`` of the
+    header, removed. Same key order
     and format as the engine's own dump.
     """
     report = json.loads(raw)
+    del report["host"]
     for finding in report["findings"]:
         del finding["src_pkg"], finding["summary"]
     for version in report["versions"]:

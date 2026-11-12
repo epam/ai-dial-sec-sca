@@ -11,10 +11,6 @@ from normalize import SEVERITIES
 from sca_rules import norm
 from vulns import COUNT_KEYS, VERSION, counts_of, fixed_of, pkg_of
 
-# GitHub rejects a step summary over 1 MiB; the rest of the limit is left for the
-# parts of the job summary that are not this one
-STEP_SUMMARY_LIMIT_BYTES = 1024 * 1024 - 16 * 1024
-
 # a row lists at most this many vulnerability ids (a curl row has about 27)
 MAX_IDS_IN_CELL = 5
 
@@ -548,29 +544,3 @@ def build_summary(report: Mapping[str, Any]) -> str:
         "`_native/trivy/` and `_native/osv/`.",
     ]
     return "\n".join(lines) + "\n"
-
-
-def truncate_summary(text: str, run_url: str | None) -> str:
-    """The summary as the job summary can take it: whole if it fits, else cut at a
-    line, with the ``<details>`` the cut leaves open closed and a note on where the
-    whole of it is.
-    """
-    data = text.encode("utf-8")
-    if len(data) <= STEP_SUMMARY_LIMIT_BYTES:
-        return text
-    where = "the `sca-report` artifact of this run"
-    if run_url:
-        where = f"the `sca-report` artifact of [this run]({run_url})"
-    note = (
-        f"\n> The summary is cut: it is {len(data)} bytes and a job summary takes "
-        f"1 MiB. The whole `summary.md` is in {where}.\n"
-    )
-    close = "</details>\n"
-    room = STEP_SUMMARY_LIMIT_BYTES - len(note.encode("utf-8"))
-    while True:
-        kept = data[:room].decode("utf-8", errors="ignore")
-        kept = kept[: kept.rfind("\n") + 1]
-        closing = close * max(kept.count("<details") - kept.count("</details>"), 0)
-        if len((kept + closing + note).encode("utf-8")) <= STEP_SUMMARY_LIMIT_BYTES:
-            return kept + closing + note
-        room -= len(close)

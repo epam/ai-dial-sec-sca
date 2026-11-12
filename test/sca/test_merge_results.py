@@ -73,6 +73,7 @@ class Run:
 
     def __init__(self, tmp_path: Path, targets, header: dict | None = None):
         self.parts, self.out = tmp_path / "parts", tmp_path / "out"
+        self.notes: list = []
         self.targets_file = tmp_path / "targets.json"
         self.targets_file.write_text(
             json.dumps(
@@ -98,7 +99,15 @@ class Run:
             (folder / f"{tid}.status.json").write_text(json.dumps(status))
 
     def merge(self):
-        run_merge(self.targets_file, self.parts, self.out, "2026-10-14T00:00:00Z", DB)
+        run_merge(
+            self.targets_file,
+            self.parts,
+            self.out,
+            "2026-10-14T00:00:00Z",
+            DB,
+            host="github.com",
+            notes=self.notes,
+        )
         report = json.loads((self.out / "report.json").read_text(encoding="utf-8"))
         failed = sum(t["status"] == "failed" for t in report["targets"])
         return failed, report
@@ -262,30 +271,124 @@ def test_not_applicable_is_kept_and_is_not_a_failure(tmp_path):
     assert entry(report, "t", "osv")["reason"] == "nothing to scan"
 
 
-def test_zero_packages_is_reported_as_suspicious(tmp_path, capsys):
+def test_zero_packages_is_reported_as_suspicious(tmp_path):
     run = Run(tmp_path, [target("s", "trivy")])
     run.part("trivy", "s", trivy_native(packages=[]), {"status": "ok"})
     _, report = run.merge()
     assert entry(report, "s")["packages_scanned"] == 0
-    assert "No packages in scan result" in capsys.readouterr().out
+    assert run.notes == [
+        {
+            "level": "warning",
+            "message": "s (trivy): 0 packages were seen",
+            "title": "No packages in scan result",
+            "target": "s",
+        }
+    ]
 
 
-def test_main_appends_the_summary_and_writes_the_failed_count(tmp_path, monkeypatch):
-    run = Run(tmp_path, [target("s", "trivy")])  # no part: the scan produced nothing
-    summary, output = tmp_path / "step.md", tmp_path / "output"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    argv = [
+def cli_args(run, *extra):
+    return [
         "--targets-file",
         str(run.targets_file),
         "--parts-dir",
         str(run.parts),
         "--output-dir",
         str(run.out),
+        *extra,
     ]
-    main(argv)
-    assert output.read_text() == "failed-count=1\n"
-    assert "# SCA · o/app" in summary.read_text(encoding="utf-8")
+
+
+def read_report(run):
+    return json.loads((run.out / "report.json").read_text(encoding="utf-8"))
+
+
+def read_outputs(run):
+    return json.loads((run.out / "outputs.json").read_text(encoding="utf-8"))
+
+
+def test_main_writes_outputs_summary_and_annotations(tmp_path, run_env):
+    run = Run(tmp_path, [target("s", "trivy")])  # no part: the scan produced nothing
+    assert main(cli_args(run)) == 0  # a failed target is not a failed command
+    assert read_outputs(run) == {
+        "contract": 1,
+        "command": "merge",
+        "status": "failed_targets",
+        "engine": None,
+        "message": None,
+        "outputs": {
+            "failed-count": 1,
+            "report-file": str(run.out / "report.json"),
+        },
+    }
+    assert "# SCA · o/app" in (run.out / "summary.md").read_text(encoding="utf-8")
+    assert json.loads((run.out / "annotations.json").read_text(encoding="utf-8")) == [
+        {
+            "level": "error",
+            "message": "s (trivy): scan job produced no result",
+            "title": "Scan target failed",
+            "target": "s",
+        }
+    ]
+
+
+def test_main_status_is_ok_without_failed_targets(tmp_path, run_env):
+    run = Run(tmp_path, [target("s", "trivy", status="not_applicable", reason="x")])
+    assert main(cli_args(run)) == 0
+    outputs = read_outputs(run)
+    assert (outputs["status"], outputs["outputs"]["failed-count"]) == ("ok", 0)
+
+
+def test_main_takes_host_engine_and_attempt_from_the_run_context(tmp_path, run_env):
+    run_env(SCA_RUN_ENGINE_REF="v0.7.0", SCA_RUN_ATTEMPT="3", SCA_RUN_HOST="git.example")
+    run = Run(tmp_path, [target("s", "trivy")])
+    main(cli_args(run))
+    report = read_report(run)
+    assert (report["host"], report["engine"], report["run_attempt"]) == (
+        "git.example",
+        "v0.7.0",
+        3,
+    )
+    assert list(report).index("host") == list(report).index("repo") + 1
+    assert read_outputs(run)["engine"] == "v0.7.0"
+
+
+def test_the_host_of_targets_json_wins(tmp_path, run_env):
+    run = Run(tmp_path, [target("s", "trivy")], {"host": "scanned.example"})
+    main(cli_args(run))
+    assert read_report(run)["host"] == "scanned.example"
+
+
+def test_engine_ref_argument_wins_over_the_run_context(tmp_path, run_env):
+    run_env(SCA_RUN_ENGINE_REF="from-env")
+    run = Run(tmp_path, [target("s", "trivy")])
+    main(cli_args(run, "--engine-ref", "from-arg"))
+    assert read_report(run)["engine"] == "from-arg"
+    assert read_outputs(run)["engine"] == "from-arg"
+
+
+def test_engine_and_attempt_default_to_null_and_one(tmp_path, run_env, monkeypatch):
+    monkeypatch.setenv("ACTION_PATH", "/r/_actions/epam/x/v0.7.0/actions/sca_merge_results")
+    run = Run(tmp_path, [target("s", "trivy")])
+    main(cli_args(run))
+    report = read_report(run)
+    assert (report["engine"], report["run_attempt"]) == (None, 1)  # no path guessing
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"SCA_RUN_ID": None}, "SCA_RUN_ID"),
+        ({"SCA_RUN_URL": ""}, "SCA_RUN_URL"),
+        ({"SCA_RUN_ATTEMPT": "x"}, "SCA_RUN_ATTEMPT must be a number"),
+    ],
+)
+def test_main_exits_2_on_a_bad_run_context(tmp_path, run_env, changes, message):
+    run_env(**changes)
+    run = Run(tmp_path, [target("s", "trivy")])
+    assert main(cli_args(run)) == 2
+    outputs = read_outputs(run)
+    assert outputs["status"] == "error" and message in outputs["message"]
+    assert not (run.out / "report.json").exists()
 
 
 def test_a_package_of_two_ecosystems_counts_twice():
@@ -379,7 +482,15 @@ def test_report_header_has_engine_and_run_attempt_and_versions_replace_counts(tm
     run = Run(tmp_path, [target("source-development", "trivy")])
     run.part("trivy", "source-development", trivy_native([VULN]), {"status": "ok"})
     run_merge(
-        run.targets_file, run.parts, run.out, "2026-10-14T00:00:00Z", DB, "v0.7.0", 2
+        run.targets_file,
+        run.parts,
+        run.out,
+        "2026-10-14T00:00:00Z",
+        DB,
+        "v0.7.0",
+        2,
+        host="github.com",
+        notes=[],
     )
     report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
     assert list(report)[:2] == ["schema_version", "engine"]
@@ -390,97 +501,3 @@ def test_report_header_has_engine_and_run_attempt_and_versions_replace_counts(tm
     assert list(report)[-4:] == tail
     (version,) = report["versions"]
     assert version["counts"]["h"] == 1 and version["vulns"][0]["id"] == "CVE-2026-1"
-
-
-def test_main_reads_engine_and_run_attempt_from_the_environment(tmp_path, monkeypatch):
-    run = Run(tmp_path, [target("s", "trivy")])
-    path = "/r/_actions/epam/ai-dial-sec-sca/v0.7.0/actions/sca_merge_results"
-    monkeypatch.setenv("ACTION_PATH", path)
-    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "3")
-    main(
-        [
-            "--targets-file",
-            str(run.targets_file),
-            "--parts-dir",
-            str(run.parts),
-            "--output-dir",
-            str(run.out),
-        ]
-    )
-    report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
-    assert (report["engine"], report["run_attempt"]) == ("v0.7.0", 3)
-
-
-@pytest.mark.parametrize("value", [None, "x"])
-def test_main_run_attempt_is_null_when_missing_or_not_a_number(
-    tmp_path, monkeypatch, value
-):
-    run = Run(tmp_path, [target("s", "trivy")])
-    monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
-    if value:
-        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", value)
-    main(
-        [
-            "--targets-file",
-            str(run.targets_file),
-            "--parts-dir",
-            str(run.parts),
-            "--output-dir",
-            str(run.out),
-        ]
-    )
-    report = json.loads((run.out / "report.json").read_text(encoding="utf-8"))
-    assert report["run_attempt"] is None
-
-
-def run_main_with_engine(tmp_path, monkeypatch, args=(), env=None, action_path=None):
-    run = Run(tmp_path, [target("s", "trivy")])
-    monkeypatch.delenv("SCA_ENGINE_REF", raising=False)
-    monkeypatch.delenv("ACTION_PATH", raising=False)
-    if action_path:
-        monkeypatch.setenv("ACTION_PATH", action_path)
-    if env:
-        monkeypatch.setenv("SCA_ENGINE_REF", env)
-    main(
-        [
-            "--targets-file",
-            str(run.targets_file),
-            "--parts-dir",
-            str(run.parts),
-            "--output-dir",
-            str(run.out),
-            *args,
-        ]
-    )
-    return json.loads((run.out / "report.json").read_text(encoding="utf-8"))["engine"]
-
-
-ACTION_REF_PATH = "/r/_actions/epam/ai-dial-sec-sca/v0.7.0/actions/sca_merge_results"
-
-
-def test_engine_ref_argument_wins_over_env_and_action_path(tmp_path, monkeypatch):
-    # the env default is read when the arguments are parsed, so the env is set first
-    engine = run_main_with_engine(
-        tmp_path,
-        monkeypatch,
-        args=["--engine-ref", "from-arg"],
-        env="from-env",
-        action_path=ACTION_REF_PATH,
-    )
-    assert engine == "from-arg"
-
-
-def test_engine_ref_env_wins_over_action_path(tmp_path, monkeypatch):
-    engine = run_main_with_engine(
-        tmp_path, monkeypatch, env="from-env", action_path=ACTION_REF_PATH
-    )
-    assert engine == "from-env"
-
-
-def test_engine_ref_falls_back_to_the_action_path(tmp_path, monkeypatch):
-    engine = run_main_with_engine(tmp_path, monkeypatch, action_path=ACTION_REF_PATH)
-    assert engine == "v0.7.0"
-
-
-def test_engine_ref_is_null_without_argument_env_and_action_path(tmp_path, monkeypatch):
-    assert run_main_with_engine(tmp_path, monkeypatch) is None

@@ -8,7 +8,7 @@ These actions are called by the `sca_scheduled.yml` workflow of [epam/ai-dial-ci
 
 - `actions/sca_resolve_targets`: builds the list of scan targets and resolves the releases: the default branch source, the source of each release of the release set, and, per image, `development` and the same release tags. The release set is the newest patch of each of the last `release-lines` (default 2) minor lines (`X.Y.Z` tags of non-prerelease, non-draft GitHub releases), plus at most one candidate. The candidate is the newest prerelease (by version, `X.Y.Z-pre`) whose base version is greater than the newest stable; a prerelease of an already published version is not scanned. A stable release whose tag is not `X.Y.Z` is left out of the set and counted in one notice. The release listing is read page by page (up to 1000 releases). Inputs: `scan-tag` focuses the run on one git tag (its source and the tag in every image, no `development`); `osv-image-scan` is the repository's own setting that switches the direct OSV image scan off; `force-image-scan` runs that scan anyway (a manual run) and marks the run with `forced_image_scan` in `targets.json` and `report.json`. Pass `osv-image-scan` as the repository sets it, not combined with the force flag: the action does the combining.
 - `actions/sca_query_osv`: checks the language packages found by Trivy against OSV with osv-scanner; an image target also gets a direct `osv-scanner scan image`, which reads the image's own package database and so checks its OS packages against OSV correctly (a BOM cannot: OSV keys its records by the source package name). The BOM query runs either way, so a package either detector sees keeps its OSV check. The action installs Trivy from the aquasecurity/trivy GitHub release of `trivy-version` (a tag of the form `vX.Y.Z`, else the action fails). The sha256 of the release archive is pinned in the engine per version (`v0.75.0`, Linux-64bit and Linux-ARM64); the `checksums.txt` of the release is not trusted alone. Another version needs the optional input `trivy-sha256` (the sha256 of the archive of the runner's architecture), else the action fails. The install is cached by version, OS and architecture; the cache keeps the archive, which is verified and unpacked again on every run, so a restored cache is not trusted. Optional input `offline-db-dir`: a directory with the osv-scanner offline databases that the caller downloaded beforehand (the engine never downloads them). Given, the action sets `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY` to it and runs both scans (BOM and image) with `--offline`, which also switches off the other network features of osv-scanner. An osv-scanner run that reports `no offline version of the OSV database` on stderr fails its target whatever the exit code, with the stderr tail as the reason. Empty (the default): nothing changes. A target of `targets.json` may carry `image_scan_disabled_reason` next to `image_scan_disabled`; it is then the reason shown for the skipped image scan.
-- `actions/sca_merge_results`: normalizes the Trivy and OSV reports, merges them into `report.json` and writes the `summary.md` job summary (see below). Optional input `engine-ref` (or the environment variable `SCA_ENGINE_REF`, or the `--engine-ref` argument of `merge_results.py`) sets the `engine` field of the report. The order is the argument, then the environment variable, then the ref the action runs from (`ACTION_PATH`), else `null`. Empty (the default): nothing changes.
+- `actions/sca_merge_results`: normalizes the Trivy and OSV reports, merges them into `report.json` and writes the `summary.md` job summary (see below). Optional input `engine-ref` sets the `engine` field of the report; empty (the default) means the ref the action runs from, read from the runner path of the action (`github.action_ref` is not reliable in composite actions), which is `null` for an action used by a local path. The scripts take it from `SCA_RUN_ENGINE_REF`, or the `--engine-ref` argument of `merge_results.py`, which wins; they do not look at the path they run from.
 - `actions/_install_trivy`: installs Trivy from the GitHub release of `version` (same rules and the same optional `trivy-sha256` as in `sca_query_osv`); `sca_query_osv` repeats its steps and shares its `install.sh`, because a composite action cannot use a sibling action by a relative path.
 - `actions/generate_gradle_lockfiles`: generates Gradle lockfiles on the fly so Trivy can resolve Gradle dependencies (repository files are not modified).
 - `actions/sca_fix_plan` and `actions/sca_fix_apply`: the fixer, see Fixer below.
@@ -57,6 +57,36 @@ Optional keys of `targets.json` that the caller may add before the merge (the re
 | `image_scan_disabled_reason` | string, on a target | The reason shown for a skipped OSV image scan (next to `image_scan_disabled`). |
 
 `sca_fix_plan` (`reports`, `config`, `output-dir`) and `sca_fix_apply` are described under Fixer.
+
+## Run context and outputs
+
+The scripts of the engine read no `GITHUB_*` variable and print no workflow command. The composite actions map the GitHub values to the run context the scripts read:
+
+| Variable | Required | GitHub value |
+|---|---|---|
+| `SCA_RUN_HOST` | yes | host of `github.server_url` |
+| `SCA_RUN_REPO` | yes | `github.repository` |
+| `SCA_RUN_ID` | yes | `github.run_id` |
+| `SCA_RUN_ATTEMPT` | no (1) | `github.run_attempt` |
+| `SCA_RUN_URL` | yes | `<server_url>/<repository>/actions/runs/<run_id>`; the run URL is never built by the scripts |
+| `SCA_RUN_EVENT` | yes | `github.event_name`, copied to `event` as it is |
+| `SCA_RUN_ACTOR` | yes | `github.triggering_actor` |
+| `SCA_RUN_DEFAULT_BRANCH` | no | `github.event.repository.default_branch` |
+| `SCA_RUN_ENGINE_REF` | no | the `engine-ref` input if set, else the ref in the runner path of the action |
+
+`sca_resolve_targets` and `sca_merge_results` need the required variables (exit code 2 and a message naming the missing ones otherwise); the host is written as `host` next to `repository` into `targets.json` and `report.json` (a `host` already in `targets.json` wins). `sca_resolve_targets` reads the GitHub token from `GH_TOKEN` and takes the inputs as arguments (`--repository`, `--registry`, `--images`, `--osv-image-scan`, `--force-image-scan`, `--release-lines`, `--scan-tag`, `--output-dir`).
+
+A script writes the following into its output directory, also when it fails:
+
+| File | Content |
+|---|---|
+| `outputs.json` | `contract` (1), `command`, `status` (`ok`, `failed_targets`, `error`), `engine`, `message` (the error text) and `outputs`, the values that are the outputs of the action: `matrix`, `targets-file` (`sca_resolve_targets`), `failed-count`, `report-file` (`sca_merge_results`), `plan-file` (`sca_fix_plan`). `sca_merge_results` exits 0 with failed targets and says `failed_targets`. |
+| `annotations.json` | The messages for the CI UI: a list of `level` (`notice`, `warning`, `error`), `message`, `title` and `target`. |
+| `summary.md` | The job summary of `sca_merge_results`. |
+
+The last step of each action (`python -m _sca_lib.github`) turns these files into GitHub: the step outputs (`GITHUB_OUTPUT`), the job summary (`GITHUB_STEP_SUMMARY`, cut to its 1 MiB limit) and one workflow command per annotation. It is the only code that knows these syntaxes, and it does not change the exit status of the action.
+
+The files are described by the JSON Schemas in `schema/` (`targets`, `report`, `outputs`, `annotations`); the tests validate what the engine writes against them.
 
 ## Job summary
 

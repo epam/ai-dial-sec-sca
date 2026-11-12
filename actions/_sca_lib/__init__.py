@@ -3,6 +3,10 @@
 An action puts the ``actions`` directory on ``PYTHONPATH``
 (``${{ github.action_path }}/..``) and imports ``from _sca_lib import ...``. A package
 and not a loose module: it cannot shadow a module of the standard library.
+
+``context`` reads the run context (``SCA_RUN_*``), ``outputs`` writes what a command
+leaves for its caller (``outputs.json``, ``annotations.json``), ``github`` turns that
+into GitHub step outputs, summary and annotations.
 """
 
 from __future__ import annotations
@@ -11,19 +15,6 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-
-def escape_command_data(text: object) -> str:
-    """Escape a text for a workflow command (``::warning::``): ``%``, CR and LF in
-    scanner output or a repository name would end or forge the command.
-    """
-    return str(text).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-
-
-def append_text(path: str | Path, text: str) -> None:
-    """Append to a file of the step ($GITHUB_OUTPUT, $GITHUB_STEP_SUMMARY)."""
-    with open(path, "a", encoding="utf-8", newline="\n") as f:
-        f.write(text)
 
 
 def read_json(path: Path) -> Any:
