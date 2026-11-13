@@ -28,6 +28,9 @@ from sca.merge.vulns import records_of
 RESCAN_ENV = {
     k: v for k, v in SCAN_ENV.items() if k not in ("TRIVY_SKIP_DB_UPDATE", "TRIVY_SKIP_JAVA_DB_UPDATE")
 }
+# the packaged Gradle init script (lockfiles and dependency graph), for the lockfile command
+GRADLE_INIT_ENV = "SCA_GRADLE_INIT_SCRIPT"
+GRADLE_INIT_SCRIPT = str(Path(__file__).resolve().parents[1] / "gradle" / "lockfiles.init.gradle")
 SERIOUS = ("HIGH", "CRITICAL")
 NOT_IN_BASELINE = "the item's vulnerabilities are not in the baseline scan"
 # the gate verdict of rule 1b: not a reason code, the item is applied
@@ -126,7 +129,8 @@ def run_trivy(args: list[str], native: Path, cwd: Path | None = None) -> None:
 def scan_tree(tree: Path, lockfile_command: str = "") -> set[Finding]:
     """Scan a copy of ``tree``: the generated lockfiles of a Gradle build stay out of
     the working tree, so they can never reach a commit. A Gradle build whose command
-    wrote no lockfile is a failed run, not a clean one.
+    wrote no lockfile is a failed run, not a clean one. The command gets the path of the
+    packaged init script in ``SCA_GRADLE_INIT_SCRIPT``.
     """
     with tempfile.TemporaryDirectory() as parent:
         copy = Path(parent) / "tree"
@@ -138,6 +142,7 @@ def scan_tree(tree: Path, lockfile_command: str = "") -> set[Finding]:
                 done = subprocess.run(
                     ["bash", "-ec", lockfile_command],
                     cwd=copy,
+                    env={**os.environ, GRADLE_INIT_ENV: GRADLE_INIT_SCRIPT},
                     capture_output=True,
                     check=False,
                     text=True,

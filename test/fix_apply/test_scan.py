@@ -475,3 +475,20 @@ def test_n6_1_rescan_runs_trivy_apart_from_the_repository_and_the_machine(
     assert seen["config"] == "{}"  # an empty config file: the trivy.yaml of the tree is not read
     assert env["TRIVY_SEVERITY"].startswith("UNKNOWN") and env["TRIVY_TIMEOUT"] == "15m"
     assert env["TRIVY_CACHE_DIR"] == "/cache" and "TRIVY_SKIP_DB_UPDATE" not in env
+
+
+def test_n6_1_lockfile_command_gets_the_packaged_init_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, str] = {}
+
+    def run(command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs["env"])
+        return subprocess.CompletedProcess(command, 3, "", "no")
+
+    monkeypatch.setattr("sca.fix.scan.subprocess.run", run)
+    with pytest.raises(ScanError, match="lockfile generation failed"):
+        scan_tree(tmp_path, "./gradlew")
+    script = Path(seen["SCA_GRADLE_INIT_SCRIPT"])
+    assert script.is_absolute()
+    assert "resolveAndLockAllConfigurations" in script.read_text(encoding="utf-8")

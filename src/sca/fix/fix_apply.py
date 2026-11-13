@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply_parser.add_argument(
         "--lockfile-command",
         default="",
-        help="shell command that writes the Gradle lockfiles into the tree it runs in",
+        help="shell command that writes the Gradle lockfiles into the tree it runs in; $SCA_GRADLE_INIT_SCRIPT is the packaged init script",
     )
     apply_parser.add_argument("--docker-build-arg", action="append", default=[])
     apply_parser.add_argument(
