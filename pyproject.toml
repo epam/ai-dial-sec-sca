@@ -20,3 +20,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 # the GitHub adapter is a script run by path, not a package
 pythonpath = ["actions/_github"]
+
+[tool.setuptools.package-data]
+sca = ["gradle/*.gradle"]
