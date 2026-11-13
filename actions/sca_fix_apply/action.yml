@@ -33,7 +33,7 @@ inputs:
     description: Dependabot proxy image reference (apply)
     default: ""
   lockfile-command:
-    description: Shell command that writes the Gradle lockfiles into the tree it runs in (apply, Gradle repositories)
+    description: Shell command that writes the Gradle lockfiles into the tree it runs in (apply, Gradle repositories); the environment variable SCA_GRADLE_INIT_SCRIPT is the absolute path of the init script of the engine (lockfiles and dependency graph)
     default: ""
   docker-build-args:
     description: Docker build arguments for the image rescan, newline-separated (apply)

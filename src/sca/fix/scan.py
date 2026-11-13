@@ -18,22 +18,16 @@ from sca.fix import apply_codes as codes
 from sca.merge.normalize import Findings, Inventory, normalize_osv, normalize_trivy
 from sca.osv.query_osv import Runner, run_command, scan_target
 from sca.rules import norm
+from sca.trivy import SCAN_ENV, isolated, trivy
 from sca.merge.vulns import records_of
 
-# The scan profile of the scheduled scan (sca_scheduled.yml): exposure, not a gate,
-# so nothing is ignored or filtered out and the repository's own settings cannot
-# change what is compared
-TRIVY_ENV = {
-    "TRIVY_IGNOREFILE": "/dev/null",
-    "TRIVY_IGNORE_UNFIXED": "false",
-    "TRIVY_SEVERITY": "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL",
-    "TRIVY_PKG_TYPES": "os,library",
-    "TRIVY_SCANNERS": "vuln",
-    "TRIVY_LIST_ALL_PKGS": "true",
-    "TRIVY_INCLUDE_DEV_DEPS": "true",
-    "TRIVY_EXIT_CODE": "0",
-    "TRIVY_DISABLE_VEX_NOTICE": "true",
-}
+# The rescan runs Trivy as the scheduled scan does (``sca.trivy``: its settings, nothing
+# inherited from the machine, no ``trivy.yaml`` of the repository, no database update:
+# the caller downloaded the databases first, so the baseline and every rescan of a line
+# see one database state). The cache directory is the one thing taken from the environment.
+# the packaged Gradle init script (lockfiles and dependency graph), for the lockfile command
+GRADLE_INIT_ENV = "SCA_GRADLE_INIT_SCRIPT"
+GRADLE_INIT_SCRIPT = str(Path(__file__).resolve().parents[1] / "gradle" / "lockfiles.init.gradle")
 SERIOUS = ("HIGH", "CRITICAL")
 NOT_IN_BASELINE = "the item's vulnerabilities are not in the baseline scan"
 # the gate verdict of rule 1b: not a reason code, the item is applied
@@ -119,15 +113,10 @@ def detect(
 
 def run_trivy(args: list[str], native: Path, cwd: Path | None = None) -> None:
     """Run ``trivy <args> --format json`` and write the result to ``native``."""
+    env = SCAN_ENV | {k: v for k, v in os.environ.items() if k == "TRIVY_CACHE_DIR"}
     try:
-        done = subprocess.run(
-            ["trivy", *args, "--format", "json", "--output", str(native)],
-            cwd=cwd,
-            env={**os.environ, **TRIVY_ENV},
-            capture_output=True,
-            check=False,
-            text=True,
-        )
+        with isolated() as apart:
+            done = trivy([*args, "--format", "json", "--output", str(native)], env | apart, cwd, capture=True)
     except OSError as exc:
         raise ScanError(f"trivy {args[0]} failed: {exc}") from exc
     if done.returncode != 0 or not native.is_file():
@@ -137,7 +126,8 @@ def run_trivy(args: list[str], native: Path, cwd: Path | None = None) -> None:
 def scan_tree(tree: Path, lockfile_command: str = "") -> set[Finding]:
     """Scan a copy of ``tree``: the generated lockfiles of a Gradle build stay out of
     the working tree, so they can never reach a commit. A Gradle build whose command
-    wrote no lockfile is a failed run, not a clean one.
+    wrote no lockfile is a failed run, not a clean one. The command gets the path of the
+    packaged init script in ``SCA_GRADLE_INIT_SCRIPT``.
     """
     with tempfile.TemporaryDirectory() as parent:
         copy = Path(parent) / "tree"
@@ -149,6 +139,7 @@ def scan_tree(tree: Path, lockfile_command: str = "") -> set[Finding]:
                 done = subprocess.run(
                     ["bash", "-ec", lockfile_command],
                     cwd=copy,
+                    env={**os.environ, GRADLE_INIT_ENV: GRADLE_INIT_SCRIPT},
                     capture_output=True,
                     check=False,
                     text=True,

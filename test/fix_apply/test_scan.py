@@ -20,6 +20,7 @@ from sca.fix.scan import (
     detect,
     gate,
     new_serious,
+    run_trivy,
     scan_image,
     scan_tree,
     tool_versions,
@@ -452,3 +453,46 @@ def test_n6_1_rule_6_broken_detector_of_the_baseline_fails_the_line(
         process_line(line(item()), "o/r", tree, fake)
     assert calls == []
     assert (tree / "package-lock.json").read_text(encoding="utf-8") == "old"
+
+
+def test_n6_1_rescan_runs_trivy_apart_from_the_repository_and_the_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def run(command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        env = kwargs["env"]
+        seen["env"], seen["command"] = env, command
+        seen["config"] = Path(env["TRIVY_CONFIG"]).read_text(encoding="utf-8")
+        Path(command[command.index("--output") + 1]).write_text("{}", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setenv("TRIVY_SEVERITY", "CRITICAL")
+    monkeypatch.setenv("TRIVY_CACHE_DIR", "/cache")
+    monkeypatch.setenv("TRIVY_DB_REPOSITORY", "example.invalid/db")
+    monkeypatch.setenv("DOCKER_CONFIG", "/machine/docker")
+    monkeypatch.setattr("sca.trivy.subprocess.run", run)
+    run_trivy(["fs", "."], tmp_path / "trivy.json", tmp_path)
+    env = seen["env"]
+    assert seen["config"] == "{}"  # an empty config file: the trivy.yaml of the tree is not read
+    assert env["TRIVY_SEVERITY"].startswith("UNKNOWN") and env["TRIVY_TIMEOUT"] == "15m"
+    assert env["TRIVY_CACHE_DIR"] == "/cache" and "TRIVY_DB_REPOSITORY" not in env
+    assert env["TRIVY_SKIP_DB_UPDATE"] == env["TRIVY_SKIP_JAVA_DB_UPDATE"] == "true"
+    assert env["DOCKER_CONFIG"] != "/machine/docker"
+
+
+def test_n6_1_lockfile_command_gets_the_packaged_init_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, str] = {}
+
+    def run(command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs["env"])
+        return subprocess.CompletedProcess(command, 3, "", "no")
+
+    monkeypatch.setattr("sca.fix.scan.subprocess.run", run)
+    with pytest.raises(ScanError, match="lockfile generation failed"):
+        scan_tree(tmp_path, "./gradlew")
+    script = Path(seen["SCA_GRADLE_INIT_SCRIPT"])
+    assert script.is_absolute()
+    assert "resolveAndLockAllConfigurations" in script.read_text(encoding="utf-8")
