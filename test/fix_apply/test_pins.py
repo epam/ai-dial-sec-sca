@@ -1,4 +1,5 @@
-"""N8.5: the osv-scanner of the fixer workflow is the one in the pin table of the engine."""
+"""N8.5: the osv-scanner of the fixer workflow is the one in the pin table of the engine
+(the workflow installs it with actions/sca_tools and pins nothing itself)."""
 
 import os
 import re
@@ -10,15 +11,6 @@ from sca.tools import pins as tool_pins
 
 LAB = Path(__file__).resolve().parents[2]
 PINS = ("OSV_SCANNER_VERSION", "SHA256_AMD64", "SHA256_ARM64")
-
-
-def pins(text: str) -> dict[str, str]:
-    found = {}
-    for name in PINS:
-        values = set(re.findall(rf"^\s*{name}:\s*(\S+)\s*$", text, re.MULTILINE))
-        assert len(values) == 1, f"{name}: expected one value, found {values}"
-        found[name] = values.pop()
-    return found
 
 
 def engine_pins() -> dict[str, str]:
@@ -52,4 +44,8 @@ def test_n8_5_the_fixer_workflow_uses_the_osv_scanner_pin_of_the_engine() -> Non
     path = workflow_path()
     if path is None:
         pytest.skip("sca_fix.yml not found: set SCA_FIX_WORKFLOW")
-    assert pins(path.read_text(encoding="utf-8")) == engine_pins()
+    text = path.read_text(encoding="utf-8")
+    assert re.search(r"uses:\s*epam/ai-dial-sec-sca/actions/sca_tools@", text)
+    assert re.search(r"tools:\s*\S*osv-scanner", text)
+    own_pin = r"^\s*(OSV_SCANNER_VERSION|SHA256_AMD64|SHA256_ARM64):"
+    assert not re.search(own_pin, text, re.MULTILINE)
