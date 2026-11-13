@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.0
 
 Action inputs and outputs are unchanged, except the new optional inputs of `sca_query_osv`.
 
@@ -16,6 +16,9 @@ Action inputs and outputs are unchanged, except the new optional inputs of `sca_
 
 - `sca osv`: the direct image scan runs without a Docker daemon: `crane pull --platform linux/amd64` writes the image to a temporary tar (one image at a time, deleted after the scan, also after a failure) and `osv-scanner scan image --archive` scans it; `docker image rm` is gone. A failed pull is a failed target (`crane pull failed (exit N): ...`). The option `--registry` and `SCA_REGISTRY_USER` / `SCA_REGISTRY_PASSWORD` work as in `sca scan` (the host rule is shared, `sca.lib.registry`); crane gets them through a `config.json` (mode 0600) in a temporary `DOCKER_CONFIG` for an image of that host only, any other image is pulled anonymously with a `config.json` without credentials (the file always exists, so no Podman auth file of the machine is read; `docker.io` uses the key `https://index.docker.io/v1/`). No command of `sca osv` or `sca scan` gets `SCA_REGISTRY_*`, `DOCKER_CONFIG` or `REGISTRY_AUTH_FILE` from the machine; a half-set or comma credential pair is refused before the first target. osv-scanner extracts the archive into the temporary directory of the image (`TMPDIR`), the actions set `TMPDIR` under `runner.temp`, and `sca` turns SIGTERM into an exit so the cleanup runs. The pull has its own timeout (600 s).
 - `actions/sca_query_osv`: installs crane too; new optional inputs `registry`, `registry-user`, `registry-password` (no `docker login` needed).
+
+- The Gradle init script is `src/sca/gradle/lockfiles.init.gradle`, shipped as package data: a pip install can generate Gradle lockfiles. The `generate_gradle_lockfiles` action reads it from there.
+- GitHub Release for every tag `v*` (`.github/workflows/release.yml`): sdist, wheel and `SHA256SUMS`; a tag with `-rc` is a pre-release. Consumers outside GitHub Actions install the wheel from the release URL with `--require-hashes`.
 
 ### Changed
 

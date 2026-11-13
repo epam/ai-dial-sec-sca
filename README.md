@@ -122,6 +122,8 @@ The planner is a module of the package, `sca.plan` (standard library only, no si
 pip install "git+https://github.com/epam/ai-dial-sec-sca@<tag>"
 ```
 
+Outside GitHub Actions, install the wheel of a GitHub Release with `--require-hashes`: `ai-dial-sec-sca @ https://github.com/epam/ai-dial-sec-sca/releases/download/<tag>/<wheel>#sha256=<hash>` (the hashes are in `SHA256SUMS` of the release).
+
 Public API:
 
 - `build_plan(reports, config)`: the fix plan (`reports` from `merge_reports`, `config` from `parse_config`).

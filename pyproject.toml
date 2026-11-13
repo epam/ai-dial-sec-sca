@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-dial-sec-sca"
-version = "0.9.0.dev0"
+version = "0.9.0rc1"
 description = "The SCA scan engine of AI DIAL: resolve targets, query OSV, merge the scan results, plan fixes"
 readme = "README.md"
 license = { file = "LICENSE" }
