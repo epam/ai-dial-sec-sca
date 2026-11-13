@@ -18,7 +18,7 @@ outputs:
     description: Number of generated gradle.lockfile files
     value: ${{ steps.generate.outputs.lockfiles }}
   graph-dir:
-    description: Directory with the dependency graph files (one JSON file per Gradle project, see lockfiles.init.gradle for the format)
+    description: Directory with the dependency graph files (one JSON file per Gradle project, see src/sca/gradle/lockfiles.init.gradle for the format)
     value: ${{ steps.generate.outputs.graph-dir }}
 
 runs:
@@ -39,7 +39,7 @@ runs:
           exit 1
         fi
         mkdir -p "$GRAPH_DIR"
-        ./gradlew --no-daemon --init-script "$GITHUB_ACTION_PATH/lockfiles.init.gradle" -Pai.dial.sca.graphDir="$GRAPH_DIR" resolveAndLockAllConfigurations --write-locks \
+        ./gradlew --no-daemon --init-script "$GITHUB_ACTION_PATH/../../src/sca/gradle/lockfiles.init.gradle" -Pai.dial.sca.graphDir="$GRAPH_DIR" resolveAndLockAllConfigurations --write-locks \
           || { echo "::error::Gradle failed to resolve dependencies"; exit 1; }
         count=$(find . -name gradle.lockfile -type f | wc -l)
         echo "Generated lockfiles: $count"
