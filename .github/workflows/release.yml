@@ -8,10 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,14 +31,31 @@ jobs:
           PY
       - name: Build sdist and wheel
         run: |
-          python -m pip install build==1.2.2.post1 setuptools==80.9.0 wheel==0.45.1
+          python -m pip install build==1.2.2.post1 setuptools==80.9.0
           python -m build --no-isolation --outdir dist
           cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           flags=()
-          case "$TAG" in *-rc*) flags+=(--prerelease);; esac
+          case "$TAG" in *-rc*|*-a*|*-b*) flags+=(--prerelease);; esac
           gh release create "$TAG" dist/* --verify-tag --title "$TAG" --generate-notes "${flags[@]}"
