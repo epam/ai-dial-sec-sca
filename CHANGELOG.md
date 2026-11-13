@@ -2,31 +2,30 @@
 
 ## v0.9.0
 
-Action inputs and outputs are unchanged, except the new optional inputs of `sca_query_osv`.
+Action inputs and outputs of the existing actions are unchanged, except the new optional inputs of `sca_query_osv`. New actions: `sca_tools`, `sca_db`, `sca_scan`.
 
 ### Added
 
-- Run context `SCA_RUN_*` (`SCA_RUN_HOST`, `_REPO`, `_ID`, `_ATTEMPT`, `_URL`, `_EVENT`, `_ACTOR`, `_ENGINE_REF`): the commands of the scan engine no longer read `GITHUB_*` variables; the composite actions map the GitHub values.
+- Run context `SCA_RUN_*` (`SCA_RUN_HOST`, `_REPO`, `_ID`, `_ATTEMPT`, `_URL`, `_EVENT`, `_ACTOR`, `_ENGINE_REF`): the commands of the scan engine (`targets`, `osv`, `merge`, `plan`, `tools`, `db`, `scan`) no longer read `GITHUB_*` variables (`sca.fix.fix_apply` still reads `GITHUB_RUN_ID`, `GITHUB_OUTPUT` and `GITHUB_STEP_SUMMARY`); the composite actions map the GitHub values.
 - `outputs.json`, `annotations.json` and `summary.md` in the output directory of a command (also when it fails): the step outputs, the workflow annotations and the job summary are rendered from them by `actions/_github/github_adapter.py`; the commands print no workflow commands.
 - `host` in `targets.json` and `report.json`.
 - `sca tools install`: installs Trivy v0.75.0, osv-scanner v2.7.0, oras v1.3.4 and crane v0.22.1 (Linux amd64 and arm64) from one pin table (`src/sca/tools/pins.py`); the sha256 is verified on every run, also of a cached download. `DIR/downloads` keeps the verified artifacts, `DIR/bin` is recreated on every run with only the binaries placed from them. Another Trivy version needs `--trivy-sha256`. `sca tools key` prints the cache key of the downloads.
 - `actions/sca_tools`: the public action around it (inputs `tools`, `trivy-version`, `trivy-sha256`, `dir`; output `dir`, the absolute `bin` directory); only `bin` is on `PATH` afterwards.
 - `sca db` and `actions/sca_db`: download the Trivy vulnerability and Java databases (repositories from the arguments, `TRIVY_DB_REPOSITORY` / `TRIVY_JAVA_DB_REPOSITORY` or the defaults of the engine) and describe the snapshot (`db-info.json`, output `db-info`), in place of the `trivy-db` job steps of `sca_scheduled.yml`. The handoff of the databases to the scan jobs stays with the caller.
 - `sca scan` and `actions/sca_scan`: scan one target with Trivy and write its parts (`trivy/<id>.json`, `.status.json`, `.txt`, `.trivyignore`, `.gradle-graph/`), in place of the scan steps of the `trivy` job of `sca_scheduled.yml`. The scan settings are owned by the engine, a failed scan (or any exception, or a bad argument value) leaves a `failed` status and exits 1 (2 for a bad value). Registry credentials are `SCA_REGISTRY_USER` and `SCA_REGISTRY_PASSWORD` (inputs `registry-user`, `registry-password`), given to Trivy through its environment for an image of `--registry` only; the `docker login` of the workflow is not needed.
-
 - `sca osv`: the direct image scan runs without a Docker daemon: `crane pull --platform linux/amd64` writes the image to a temporary tar (one image at a time, deleted after the scan, also after a failure) and `osv-scanner scan image --archive` scans it; `docker image rm` is gone. A failed pull is a failed target (`crane pull failed (exit N): ...`). The option `--registry` and `SCA_REGISTRY_USER` / `SCA_REGISTRY_PASSWORD` work as in `sca scan` (the host rule is shared, `sca.lib.registry`); crane gets them through a `config.json` (mode 0600) in a temporary `DOCKER_CONFIG` for an image of that host only, any other image is pulled anonymously with a `config.json` without credentials (the file always exists, so no Podman auth file of the machine is read; `docker.io` uses the key `https://index.docker.io/v1/`). No command of `sca osv` or `sca scan` gets `SCA_REGISTRY_*`, `DOCKER_CONFIG` or `REGISTRY_AUTH_FILE` from the machine; a half-set or comma credential pair is refused before the first target. osv-scanner extracts the archive into the temporary directory of the image (`TMPDIR`), the actions set `TMPDIR` under `runner.temp`, and `sca` turns SIGTERM into an exit so the cleanup runs. The pull has its own timeout (600 s).
 - `actions/sca_query_osv`: installs crane too; new optional inputs `registry`, `registry-user`, `registry-password` (no `docker login` needed).
-
-- The Gradle init script is `src/sca/gradle/lockfiles.init.gradle`, shipped as package data: a pip install can generate Gradle lockfiles. The `generate_gradle_lockfiles` action reads it from there.
-- GitHub Release for every tag `v*` (`.github/workflows/release.yml`): sdist, wheel and `SHA256SUMS`; a tag with `-rc` is a pre-release. Consumers outside GitHub Actions install the wheel from the release URL with `--require-hashes`.
+- GitHub Release for every tag `v*` (`.github/workflows/release.yml`): sdist, wheel and `SHA256SUMS`; the tag must match the package version; `-rc`, `-a` and `-b` tags are pre-releases.
 
 ### Changed
 
+- **Behaviour change:** the fixer rescan (`sca_fix_apply`) runs Trivy like `sca scan` (the settings of `sca.trivy`, nothing inherited from the machine, an empty config file: the `trivy.yaml` of the repository is not read; timeout 15m). Trivy still downloads its own databases there; `TRIVY_CACHE_DIR` is the only variable taken from the environment.
 - **Behaviour change:** `sca scan` and `sca db` run Trivy with nothing inherited from the machine (no `TRIVY_*`, an empty Docker config) and with an empty config file: the `trivy.yaml` of a scanned repository is not used by the scheduled scan (its settings could filter findings), and the Trivy timeout is engine-owned (15m, `TRIVY_TIMEOUT` in the scan settings). The `trivy-version` input of `sca_query_osv` is optional (empty: the pinned version).
 - One Python package, `ai-dial-sec-sca` (src layout), with the command `sca` (`targets`, `osv`, `merge`, `plan`); the actions run `python -P -m sca <command>` so the checked-out workspace cannot shadow the engine.
 - `sca targets` exits 2 on a usage error.
 - `sca_query_osv` and `sca_resolve_targets` install their tools with `sca tools install`; osv-scanner is pinned in the table instead of the action, and oras comes from the table (v1.3.4) instead of `oras-project/setup-oras`. Only the verified downloads are cached by `actions/cache` (the binaries are rebuilt on every run) under a key from `sca tools key` (platform, tools, pinned versions and checksums). The inputs `trivy-version` and `trivy-sha256` keep their meaning.
 - `sca <command> --help` shows `usage: sca <command> ...` (it showed `__main__.py`).
+- **BREAKING for direct consumers:** the Gradle init script moved from `actions/generate_gradle_lockfiles/lockfiles.init.gradle` to `src/sca/gradle/lockfiles.init.gradle` and is shipped as package data (a pip install can generate Gradle lockfiles); the old path is gone. The `generate_gradle_lockfiles` action reads it from the new place. The lockfile command of `sca_fix_apply` gets its path in the environment variable `SCA_GRADLE_INIT_SCRIPT`.
 - **BREAKING for direct consumers:** the internal action `actions/_install_trivy` is removed; use `actions/sca_tools`.
 - **BREAKING for direct consumers:** the packages `sca-rules` and `sca-fix-plan` in subdirectories are gone; import `sca.rules` and `sca.plan` from `ai-dial-sec-sca`. The scripts are no longer runnable by path; use `python -m sca <command>`.
 

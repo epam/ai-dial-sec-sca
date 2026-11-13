@@ -40,7 +40,7 @@ def test_n8_5_the_pin_table_has_osv_scanner_by_version_and_checksum() -> None:
     assert all(re.fullmatch(r"[0-9a-f]{64}", found[k]) for k in PINS[1:])
 
 
-def test_n8_5_the_fixer_workflow_uses_the_osv_scanner_pin_of_the_engine() -> None:
+def test_n8_5_the_fixer_workflow_installs_osv_scanner_with_sca_tools_and_pins_nothing() -> None:
     path = workflow_path()
     if path is None:
         pytest.skip("sca_fix.yml not found: set SCA_FIX_WORKFLOW")
