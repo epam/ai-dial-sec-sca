@@ -19,7 +19,7 @@ Action inputs and outputs of the existing actions are unchanged, except the new 
 
 ### Changed
 
-- **Behaviour change:** the fixer rescan (`sca_fix_apply`) runs Trivy like `sca scan` (the settings of `sca.trivy`, nothing inherited from the machine, an empty config file: the `trivy.yaml` of the repository is not read; timeout 15m). Trivy still downloads its own databases there; `TRIVY_CACHE_DIR` is the only variable taken from the environment.
+- **Behaviour change:** the fixer rescan (`sca_fix_apply`) runs Trivy like `sca scan` (the settings of `sca.trivy`, nothing inherited from the machine, an empty config file: the `trivy.yaml` of the repository is not read; timeout 15m). It uses the databases already in the cache, like `sca scan` (no update; the caller downloads them first, so the baseline and all rescans of a line see one database state); `TRIVY_CACHE_DIR` is the only variable taken from the environment.
 - **Behaviour change:** `sca scan` and `sca db` run Trivy with nothing inherited from the machine (no `TRIVY_*`, an empty Docker config) and with an empty config file: the `trivy.yaml` of a scanned repository is not used by the scheduled scan (its settings could filter findings), and the Trivy timeout is engine-owned (15m, `TRIVY_TIMEOUT` in the scan settings). The `trivy-version` input of `sca_query_osv` is optional (empty: the pinned version).
 - One Python package, `ai-dial-sec-sca` (src layout), with the command `sca` (`targets`, `osv`, `merge`, `plan`); the actions run `python -P -m sca <command>` so the checked-out workspace cannot shadow the engine.
 - `sca targets` exits 2 on a usage error.

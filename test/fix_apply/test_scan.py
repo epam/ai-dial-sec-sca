@@ -469,12 +469,16 @@ def test_n6_1_rescan_runs_trivy_apart_from_the_repository_and_the_machine(
 
     monkeypatch.setenv("TRIVY_SEVERITY", "CRITICAL")
     monkeypatch.setenv("TRIVY_CACHE_DIR", "/cache")
+    monkeypatch.setenv("TRIVY_DB_REPOSITORY", "example.invalid/db")
+    monkeypatch.setenv("DOCKER_CONFIG", "/machine/docker")
     monkeypatch.setattr("sca.trivy.subprocess.run", run)
     run_trivy(["fs", "."], tmp_path / "trivy.json", tmp_path)
     env = seen["env"]
     assert seen["config"] == "{}"  # an empty config file: the trivy.yaml of the tree is not read
     assert env["TRIVY_SEVERITY"].startswith("UNKNOWN") and env["TRIVY_TIMEOUT"] == "15m"
-    assert env["TRIVY_CACHE_DIR"] == "/cache" and "TRIVY_SKIP_DB_UPDATE" not in env
+    assert env["TRIVY_CACHE_DIR"] == "/cache" and "TRIVY_DB_REPOSITORY" not in env
+    assert env["TRIVY_SKIP_DB_UPDATE"] == env["TRIVY_SKIP_JAVA_DB_UPDATE"] == "true"
+    assert env["DOCKER_CONFIG"] != "/machine/docker"
 
 
 def test_n6_1_lockfile_command_gets_the_packaged_init_script(

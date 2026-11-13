@@ -22,12 +22,9 @@ from sca.trivy import SCAN_ENV, isolated, trivy
 from sca.merge.vulns import records_of
 
 # The rescan runs Trivy as the scheduled scan does (``sca.trivy``: its settings, nothing
-# inherited from the machine, no ``trivy.yaml`` of the repository). The fixer has no
-# ``sca db`` step: Trivy downloads its databases itself, the cache directory is the
-# one thing taken from the environment.
-RESCAN_ENV = {
-    k: v for k, v in SCAN_ENV.items() if k not in ("TRIVY_SKIP_DB_UPDATE", "TRIVY_SKIP_JAVA_DB_UPDATE")
-}
+# inherited from the machine, no ``trivy.yaml`` of the repository, no database update:
+# the caller downloaded the databases first, so the baseline and every rescan of a line
+# see one database state). The cache directory is the one thing taken from the environment.
 # the packaged Gradle init script (lockfiles and dependency graph), for the lockfile command
 GRADLE_INIT_ENV = "SCA_GRADLE_INIT_SCRIPT"
 GRADLE_INIT_SCRIPT = str(Path(__file__).resolve().parents[1] / "gradle" / "lockfiles.init.gradle")
@@ -116,7 +113,7 @@ def detect(
 
 def run_trivy(args: list[str], native: Path, cwd: Path | None = None) -> None:
     """Run ``trivy <args> --format json`` and write the result to ``native``."""
-    env = RESCAN_ENV | {k: v for k, v in os.environ.items() if k == "TRIVY_CACHE_DIR"}
+    env = SCAN_ENV | {k: v for k, v in os.environ.items() if k == "TRIVY_CACHE_DIR"}
     try:
         with isolated() as apart:
             done = trivy([*args, "--format", "json", "--output", str(native)], env | apart, cwd, capture=True)
