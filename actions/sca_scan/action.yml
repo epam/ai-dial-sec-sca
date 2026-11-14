@@ -39,7 +39,7 @@ inputs:
     description: The reason a step before this one broke (restore of the databases, checkout, lockfile generation ...); the target is then failed with it and Trivy does not run. The action also runs after such a failure
     default: ""
   trivy-version:
-    description: Trivy version to install (release tag, e.g. v0.75.0); empty means the version pinned in the engine
+    description: Trivy version to install (release tag, e.g. v0.76.2); empty means the version pinned in the engine
     default: ""
   trivy-sha256:
     description: sha256 of the Trivy release archive for this runner's architecture; needed only for a trivy-version without a pinned value in the engine

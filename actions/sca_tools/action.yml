@@ -6,7 +6,7 @@ inputs:
     description: Comma separated tools to install (trivy, osv-scanner, oras, crane)
     default: trivy,osv-scanner,oras,crane
   trivy-version:
-    description: Trivy version to install (release tag, e.g. v0.75.0); empty means the version pinned in the engine
+    description: Trivy version to install (release tag, e.g. v0.76.2); empty means the version pinned in the engine
     default: ""
   trivy-sha256:
     description: sha256 of the Trivy release archive for this runner's architecture; needed only for a trivy-version without a pinned value in the engine

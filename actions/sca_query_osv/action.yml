@@ -12,7 +12,7 @@ inputs:
     description: Directory to write the OSV parts into (osv/<id>.json and osv/<id>.status.json of every OSV target)
     required: true
   trivy-version:
-    description: Trivy version to use for converting the Trivy results to a BOM (release tag, e.g. v0.75.0); empty means the version pinned in the engine
+    description: Trivy version to use for converting the Trivy results to a BOM (release tag, e.g. v0.76.2); empty means the version pinned in the engine
     default: ""
   trivy-sha256:
     description: sha256 of the Trivy release archive for this runner's architecture; needed only for a trivy-version without a pinned value in the engine
