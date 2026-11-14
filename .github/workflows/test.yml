@@ -51,7 +51,7 @@ jobs:
     # runs the install steps of sca_query_osv as a caller uses them (no targets: nothing is scanned)
     runs-on: ubuntu-24.04
     env:
-      TRIVY_VERSION: v0.75.0
+      TRIVY_VERSION: v0.76.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

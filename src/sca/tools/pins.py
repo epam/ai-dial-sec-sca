@@ -23,11 +23,11 @@ TOOLS = {
     "trivy": Tool(
         url="https://github.com/aquasecurity/trivy/releases/download/{tag}/trivy_{version}_Linux-{arch}.tar.gz",
         arch={"linux-amd64": "64bit", "linux-arm64": "ARM64"},
-        default="v0.75.0",
+        default="v0.76.2",
         sha256={
-            "v0.75.0": {
-                "linux-amd64": "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f",
-                "linux-arm64": "a1ee9f6ffb7d112b64ff726a2a0717c21175c1114361391f4a132956751a13b3",
+            "v0.76.2": {
+                "linux-amd64": "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf",
+                "linux-arm64": "ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3",
             }
         },
         member="trivy",
@@ -35,11 +35,11 @@ TOOLS = {
     "osv-scanner": Tool(
         url="https://github.com/google/osv-scanner/releases/download/{tag}/osv-scanner_linux_{arch}",
         arch={"linux-amd64": "amd64", "linux-arm64": "arm64"},
-        default="v2.7.0",
+        default="v2.7.1",
         sha256={
-            "v2.7.0": {
-                "linux-amd64": "160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b",
-                "linux-arm64": "4061ef4c021ed3c47f203b818f337e351336cc5cd67c0274fc36bd1dfc728dd7",
+            "v2.7.1": {
+                "linux-amd64": "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8",
+                "linux-arm64": "983d22fbad9724514e3fcc6acc83b5fa64c5ffa6b0d9f510028f22c1b223ff81",
             }
         },
         member=None,
