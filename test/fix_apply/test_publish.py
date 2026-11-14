@@ -275,6 +275,83 @@ def test_n7_2_3_a_branch_of_another_token_kind_is_not_owned(
     assert result["reason_code"] == "branch_has_manual_changes"
 
 
+def pushes(monkeypatch: pytest.MonkeyPatch, before: Any = None) -> list[list[str]]:
+    """The push commands of publish; ``before`` runs just ahead of each one."""
+    seen: list[list[str]] = []
+    real = publish_module.run
+
+    def spy(cmd: Any, *args: Any, **kwargs: Any) -> str:
+        if cmd[:2] == ["git", "push"]:
+            seen.append(list(cmd))
+            if before:
+                before()
+        return real(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(publish_module, "run", spy)
+    return seen
+
+
+def test_n7_2_4_a_moved_release_branch_is_not_pushed_and_the_pr_not_touched(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = other_clone(clone)
+    commit_as(other, "t@t", "moved")
+    git(other, "push", "-q", "origin", "HEAD:release-1.2")
+    seen = pushes(monkeypatch)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    git(clone, "checkout", "-f", "-q", "release-1.2")
+    (clone / "lock").write_text("new", encoding="utf-8")
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "")
+    assert result["action"] == "none"
+    assert result["reason_code"] == "base_moved"
+    assert seen == []
+    assert not git(clone, "ls-remote", "--heads", "origin", FIX)
+
+
+def test_n7_2_4_an_unmoved_release_branch_is_pushed(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = pushes(monkeypatch)
+    assert "reason_code" not in run_fixer(clone)
+    assert len(seen) == 1
+    assert remote_sha(clone)
+
+
+def test_n7_2_4_the_lease_expects_no_branch_for_a_new_fix_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = pushes(monkeypatch)
+    run_fixer(clone)
+    assert seen[0][2] == f"--force-with-lease=refs/heads/{FIX}:"
+
+
+def test_n7_2_4_the_lease_expects_the_fetched_tip_of_an_existing_fix_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_fixer(clone, "new")
+    tip = remote_sha(clone)
+    seen = pushes(monkeypatch)
+    run_fixer(clone, "newer")
+    assert seen[0][2] == f"--force-with-lease=refs/heads/{FIX}:{tip}"
+
+
+def test_n7_2_4_a_push_to_the_fix_branch_during_the_run_is_not_overwritten(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_fixer(clone, "new")
+    other = other_clone(clone)
+    git(other, "checkout", "-q", "-B", "x", f"origin/{FIX}")
+    commit_as(other, "h@h", "human")
+
+    def human_push() -> None:
+        git(other, "push", "-q", "origin", f"HEAD:{FIX}")
+
+    pushes(monkeypatch, human_push)
+    with pytest.raises(PublishError):
+        run_fixer(clone, "newer")
+    assert git(other, "show", f"{remote_sha(clone)}:lock") == "human"
+
+
 def test_n7_3_a_closed_pull_request_with_the_same_tree_is_not_reopened(
     clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

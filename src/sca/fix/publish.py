@@ -146,9 +146,11 @@ def publish(
     name: str = BOT_NAME,
     email: str = BOT_EMAIL,
 ) -> dict[str, Any]:
-    """Force-push ``sca-fix/<branch>`` with one commit of ``files`` on the tip of the
-    branch, authored by the fixer identity ``name`` / ``email``, and open or update the
-    pull request. Nothing is pushed when the remote fix branch has commits of others
+    """Push ``sca-fix/<branch>`` (forced, with a lease on the fetched remote tip) with one
+    commit of ``files`` on the tip of the branch, authored by the fixer identity ``name`` / ``email``, and open or update the
+    pull request. Nothing is pushed when the release branch moved since the checkout
+    (``base_moved``, the result has no pull request and the pull request is not touched)
+    or the remote fix branch has commits of others
     (``branch_has_manual_changes``, the result has no pull request) or already holds
     the same tree on the same base (``unchanged``, the pull request is still
     updated), or the same tree as a branch whose newest pull request a human closed
@@ -157,13 +159,19 @@ def publish(
     """
     head = f"sca-fix/{branch}"
     exists = remote_fix_branch(tree, branch, head)
+    base = run(["git", "rev-parse", "HEAD"], tree)
+    if run(["git", "rev-parse", f"origin/{branch}"], tree) != base:
+        return {
+            "action": "none",
+            "reason": f"{branch} moved during the run, not pushed; the next run starts from its tip",
+            "reason_code": codes.BASE_MOVED,
+        }
     if exists and not owned(tree, branch, head, email):
         return {
             "action": "none",
             "reason": f"{head} has commits of others, not pushed",
             "reason_code": codes.BRANCH_HAS_MANUAL_CHANGES,
         }
-    base = run(["git", "rev-parse", "HEAD"], tree)
     run(["git", "checkout", "-B", head], tree)
     run(["git", "add", "--all", "--", *files], tree)
     same_tree = exists and run(["git", "write-tree"], tree) == run(
@@ -194,7 +202,17 @@ def publish(
             ],
             tree,
         )
-        run(["git", "push", "--force", "origin", f"HEAD:refs/heads/{head}"], tree)
+        lease = run(["git", "rev-parse", f"origin/{head}"], tree) if exists else ""
+        run(
+            [
+                "git",
+                "push",
+                f"--force-with-lease=refs/heads/{head}:{lease}",
+                "origin",
+                f"HEAD:refs/heads/{head}",
+            ],
+            tree,
+        )
     try:
         pr = open_pull_request(repo, branch, head, title, body_file, token)
     except PublishError as exc:

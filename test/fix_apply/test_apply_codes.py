@@ -31,6 +31,7 @@ from test_apply import (
 N9_2_CODES = {
     "gate_reintroduced",
     "closed_unchanged",
+    "base_moved",
     "accepted",
     "not_fixed_in_development",
     "development_data_incomplete",

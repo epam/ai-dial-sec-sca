@@ -38,6 +38,7 @@ Action inputs and outputs of the existing actions are unchanged, except the new 
 - `versions[].vulns[].upgrades`: per installed version of a record, the target version by the rule of the fix plan, or the `reason` there is none (`needs_major`, `no_fixed_version`, `version_unparsable`, `image_rebuild`).
 - `versions[].vulns[].dev_state`: `fixed`, `removed`, `open` or `incomplete`, the state `sca_fix_plan.classify` gives; `null` on development records and without a development version.
 - `actions/sca_rules`: an installable package with the rules the engine and the fixer share (package key, version order, upgrade target, fixed-in-development state). `sca_fix_plan` needs it installed next to it and fails at import with a message when it is missing; the actions put it on `PYTHONPATH`.
+- `sca_fix_apply`: nothing is pushed when the release branch moved since the checkout (`pr.reason_code` `base_moved`, no pull request is created or edited; the next run starts from the new tip), and the push of `sca-fix/<branch>` uses `--force-with-lease` on the fetched tip, so a concurrent push is never overwritten.
 - `result.json` of `sca_fix_apply`: `pr.number`, `pr.base` and `pr.url` (null without a pull request, always present); the file is documented as the contract for consumers (README).
 
 ### Changed
