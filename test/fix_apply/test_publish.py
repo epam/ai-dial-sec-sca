@@ -79,11 +79,22 @@ def opened(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(publish_module, "closed_unmerged", lambda *args: False)
 
 
-def run_fixer(work: Path, content: str = "new", who: tuple[str, str] = APP) -> Any:
+def run_fixer(
+    work: Path,
+    content: str = "new",
+    who: tuple[str, str] = APP,
+    items: list[dict[str, Any]] = [],
+) -> Any:
     """One fixer run: a fresh checkout of the release branch with ``lock`` changed."""
     git(work, "checkout", "-f", "-q", "release-1.2")
     (work / "lock").write_text(content, encoding="utf-8")
-    return publish(work, "o/r", "release-1.2", ["lock"], "t", work / "b", "", *who)
+    return publish(
+        work, "o/r", "release-1.2", ["lock"], "t", work / "b", "", *who, items
+    )
+
+
+def fixed(pkg: str, status: str = "applied", code: str | None = None) -> dict[str, Any]:
+    return {"class": "lang", "pkg": pkg, "status": status, "reason_code": code}
 
 
 def remote_sha(work: Path) -> str:
@@ -429,3 +440,87 @@ def test_u2_a_url_without_a_number_gives_a_null_number(
     monkeypatch.setattr(publish_module, "run", lambda *args, **kw: next(answers))
     pr = publish_module.open_pull_request("o/r", "b", "h", "t", tmp_path / "b", "")
     assert pr["number"] is None
+
+
+def message(work: Path) -> str:
+    return git(work, "log", "-1", "--format=%B", f"origin/{FIX}")
+
+
+def test_n7_2_4_the_commit_message_has_a_sorted_trailer_per_applied_item(
+    clone: Path, opened: None
+) -> None:
+    items = [fixed("Zed_lib"), fixed("a.b"), fixed("m", "manual", "needs_major")]
+    run_fixer(clone, items=items)
+    assert message(clone) == "t\n\nSCA-Fixed: lang/a-b\nSCA-Fixed: lang/zed-lib"
+
+
+def test_n7_2_4_no_applied_item_gives_no_trailer(clone: Path, opened: None) -> None:
+    run_fixer(clone, items=[fixed("m", "manual", "needs_major")])
+    assert message(clone) == "t"
+
+
+def guarded(clone: Path, monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """A fix branch that holds a proven fix of ``lodash``; no push or PR call after."""
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    seen = pushes(monkeypatch)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    return seen
+
+
+def test_n7_2_5a_a_transient_failure_of_a_fixed_package_keeps_the_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = guarded(clone, monkeypatch)
+    before = remote_sha(clone)
+    manual = fixed("Lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert result["action"] == "none"
+    assert result["reason_code"] == "fix_would_drop"
+    assert "lang/lodash" in result["reason"]
+    assert seen == []
+    assert remote_sha(clone) == before
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [fixed("lodash", "already_fixed", "not_in_baseline")],
+        [fixed("lodash", "manual", "needs_major")],
+        [fixed("other", "manual", "dependabot_refused")],
+        [],
+    ],
+)
+def test_n7_2_5a_other_outcomes_may_shrink_the_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, items: list[Any]
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    first = remote_sha(clone)
+    result = run_fixer(clone, "newer", items=items)
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_branch_on_an_older_release_tip_is_rebuilt(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    other = other_clone(clone)
+    commit_as(other, "t@t", "moved")
+    git(other, "push", "-q", "origin", "HEAD:release-1.2")
+    git(clone, "fetch", "-q", "origin", "+release-1.2:release-1.2")
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_branch_without_trailers_is_rebuilt(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new")
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result

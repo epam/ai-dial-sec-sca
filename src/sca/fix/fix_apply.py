@@ -151,6 +151,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
                 os.environ.get("GH_TOKEN", ""),
                 args.git_user_name,
                 args.git_user_email,
+                result["items"],
             )
             failed = pr["action"] == "failed"
             result["pr"] = {

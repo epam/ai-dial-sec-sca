@@ -97,7 +97,7 @@ def test_publish_without_files_opens_nothing(tmp_path: Path) -> None:
 
 def test_dry_run_publishes_nothing(tmp_path: Path) -> None:
     (tmp_path / "result.json").write_text(
-        json.dumps({"files": ["f"], "branch": "b"}), encoding="utf-8"
+        json.dumps({"files": ["f"], "items": [], "branch": "b"}), encoding="utf-8"
     )
     fix_apply.main(
         [
@@ -132,7 +132,7 @@ def test_node_command_writes_the_workflow_outputs(
 
 def result_file(tmp_path: Path, **fields: Any) -> None:
     (tmp_path / "result.json").write_text(
-        json.dumps({"files": ["f"], "branch": "b", **fields}), encoding="utf-8"
+        json.dumps({"files": ["f"], "items": [], "branch": "b", **fields}), encoding="utf-8"
     )
 
 

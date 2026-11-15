@@ -6,11 +6,12 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from sca.fix import apply_codes as codes
+from sca.rules import norm
 
 FAILING_STATUSES = (
     '[.statuses[] | select(.state == "failure" or .state == "error")'
@@ -18,6 +19,17 @@ FAILING_STATUSES = (
 )
 BOT_NAME = "github-actions[bot]"
 BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+TRAILER = "SCA-Fixed"
+TRANSIENT = frozenset(
+    {
+        codes.DEPENDABOT_REFUSED,
+        codes.DEPENDABOT_NO_CHANGE,
+        codes.DEPENDABOT_TIMEOUT,
+        codes.DEPENDABOT_FAILED,
+        codes.OVERRIDE_NPM_FAILED,
+        codes.RESCAN_FAILED,
+    }
+)
 
 
 class PublishError(RuntimeError):
@@ -108,6 +120,39 @@ def owned(tree: Path, branch: str, head: str, email: str) -> bool:
     return all(a.lower() in {email.lower(), BOT_EMAIL} for a in emails)
 
 
+def item_key(item: Mapping[str, Any]) -> str:
+    return f"{item['class']}/{norm(item['pkg'])}"
+
+
+def commit_message(title: str, items: Sequence[Mapping[str, Any]]) -> str:
+    """``title`` and one ``SCA-Fixed: <class>/<package>`` trailer per applied item."""
+    keys = sorted({item_key(i) for i in items if i["status"] == "applied"})
+    trailers = "\n".join(f"{TRAILER}: {k}" for k in keys)
+    return f"{title}\n\n{trailers}" if keys else title
+
+
+def dropped(tree: Path, head: str, items: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The packages the fix branch head says it fixed (``SCA-Fixed`` trailers) that this
+    run only has as a manual item with a transient code.
+    """
+    said = run(
+        [
+            "git",
+            "log",
+            "-1",
+            f"--format=%(trailers:key={TRAILER},valueonly)",
+            f"origin/{head}",
+        ],
+        tree,
+    ).split()
+    transient = {
+        item_key(i)
+        for i in items
+        if i["status"] == "manual" and i["reason_code"] in TRANSIENT
+    }
+    return sorted(transient & set(said))
+
+
 def closed_unmerged(repo: str, branch: str, head: str, token: str) -> bool:
     """True when the newest pull request from ``head`` was closed without a merge."""
     found = json.loads(
@@ -145,11 +190,14 @@ def publish(
     token: str,
     name: str = BOT_NAME,
     email: str = BOT_EMAIL,
+    items: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Push ``sca-fix/<branch>`` (forced, with a lease on the fetched remote tip) with one
     commit of ``files`` on the tip of the branch, authored by the fixer identity ``name`` / ``email``, and open or update the
     pull request. Nothing is pushed when the release branch moved since the checkout
-    (``base_moved``, the result has no pull request and the pull request is not touched)
+    (``base_moved``, the result has no pull request and the pull request is not touched),
+    the remote fix branch, based on the same tip, holds a fix (``SCA-Fixed`` trailer)
+    that this run has only as a manual item with a transient code (``fix_would_drop``),
     or the remote fix branch has commits of others
     (``branch_has_manual_changes``, the result has no pull request) or already holds
     the same tree on the same base (``unchanged``, the pull request is still
@@ -172,6 +220,13 @@ def publish(
             "reason": f"{head} has commits of others, not pushed",
             "reason_code": codes.BRANCH_HAS_MANUAL_CHANGES,
         }
+    if exists and run(["git", "rev-parse", f"origin/{head}^"], tree) == base:
+        if lost := dropped(tree, head, items):
+            return {
+                "action": "none",
+                "reason": f"{head} keeps fixes this run did not reproduce: {', '.join(lost)}",
+                "reason_code": codes.FIX_WOULD_DROP,
+            }
     run(["git", "checkout", "-B", head], tree)
     run(["git", "add", "--all", "--", *files], tree)
     same_tree = exists and run(["git", "write-tree"], tree) == run(
@@ -198,7 +253,7 @@ def publish(
                 f"user.email={email}",
                 "commit",
                 "-m",
-                title,
+                commit_message(title, items),
             ],
             tree,
         )
