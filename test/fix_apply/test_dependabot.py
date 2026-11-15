@@ -107,7 +107,9 @@ def test_read_events() -> None:
             },
             {
                 "type": "record_update_job_error",
-                "expect": {"data": {"error-type": "boom"}},
+                "expect": {
+                    "data": {"error-type": "boom", "error-details": {"k": ["v", 1]}}
+                },
             },
         ]
     }
@@ -115,4 +117,5 @@ def test_read_events() -> None:
     assert result.files == [{"name": "a"}]
     assert result.dependencies == [{"name": "d"}]
     assert result.error == "boom"
+    assert result.error_details == '{"k":["v",1]}'
     assert read_events({"output": None}).files == []

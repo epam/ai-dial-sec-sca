@@ -15,6 +15,7 @@ from typing import Any
 
 from sca.fix import apply_codes as codes
 
+DETAILS_LIMIT = 2000
 TOKEN_ENV = "LOCAL_GITHUB_ACCESS_TOKEN"
 MANIFESTS = {
     "package-lock.json",
@@ -60,6 +61,7 @@ class Outcome:
     files: list[dict[str, Any]] = field(default_factory=list)
     dependencies: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
+    error_details: str | None = None
     seconds: int = 0
 
 
@@ -171,16 +173,20 @@ def read_events(document: Mapping[str, Any]) -> Outcome:
     ``create_pull_request`` event, or the first error, or nothing.
     """
     outcome = Outcome()
-    errors: list[str] = []
+    errors: list[Mapping[str, Any]] = []
     for event in document.get("output") or []:
         data = (event.get("expect") or {}).get("data") or {}
         if event["type"] == "create_pull_request":
             outcome.files.extend(data.get("updated-dependency-files") or [])
             outcome.dependencies.extend(data.get("dependencies") or [])
         elif event["type"] == "record_update_job_error":
-            errors.append(str(data.get("error-type")))
+            errors.append(data)
     if errors:
-        outcome.error = errors[0]
+        outcome.error = str(errors[0].get("error-type"))
+        if "error-details" in errors[0]:
+            outcome.error_details = json.dumps(
+                errors[0]["error-details"], separators=(",", ":")
+            )[:DETAILS_LIMIT]
     return outcome
 
 
