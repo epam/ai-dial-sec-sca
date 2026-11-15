@@ -28,6 +28,7 @@ TRANSIENT = frozenset(
         codes.DEPENDABOT_FAILED,
         codes.OVERRIDE_NPM_FAILED,
         codes.RESCAN_FAILED,
+        codes.IMAGE_BUILD_FAILED,
     }
 )
 
@@ -120,37 +121,44 @@ def owned(tree: Path, branch: str, head: str, email: str) -> bool:
     return all(a.lower() in {email.lower(), BOT_EMAIL} for a in emails)
 
 
-def item_key(item: Mapping[str, Any]) -> str:
-    return f"{item['class']}/{norm(item['pkg'])}"
+def trailer_value(item: Mapping[str, Any]) -> str:
+    targets = ",".join(sorted(item["planned"])) or "-"
+    return f"{item['class']}/{norm(item['pkg'])} {targets}"
 
 
 def commit_message(title: str, items: Sequence[Mapping[str, Any]]) -> str:
-    """``title`` and one ``SCA-Fixed: <class>/<package>`` trailer per applied item."""
-    keys = sorted({item_key(i) for i in items if i["status"] == "applied"})
-    trailers = "\n".join(f"{TRAILER}: {k}" for k in keys)
-    return f"{title}\n\n{trailers}" if keys else title
+    """``title`` and one ``SCA-Fixed: <class>/<package> <targets>`` trailer per applied item."""
+    values = sorted({trailer_value(i) for i in items if i["status"] == "applied"})
+    trailers = "\n".join(f"{TRAILER}: {v}" for v in values)
+    return f"{title}\n\n{trailers}" if values else title
 
 
-def dropped(tree: Path, head: str, items: Sequence[Mapping[str, Any]]) -> list[str]:
-    """The packages the fix branch head says it fixed (``SCA-Fixed`` trailers) that this
-    run only has as a manual item with a transient code.
+def dropped(
+    tree: Path, branch: str, head: str, email: str, items: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    """The packages a fix branch would lose to a transient failure: the branch is one
+    commit of the fixer on the tip of ``origin/<branch>`` whose ``SCA-Fixed`` trailer
+    (key and targets) an item of this run has as a manual item with a transient outcome.
     """
+    count = run(["git", "rev-list", "--count", f"origin/{branch}..origin/{head}"], tree)
+    parent = run(["git", "rev-parse", f"origin/{head}^"], tree)
+    if count != "1" or parent != run(["git", "rev-parse", f"origin/{branch}"], tree):
+        return []
+    if run(["git", "log", "-1", "--format=%ae", f"origin/{head}"], tree).lower() != email.lower():
+        return []
     said = run(
-        [
-            "git",
-            "log",
-            "-1",
-            f"--format=%(trailers:key={TRAILER},valueonly)",
-            f"origin/{head}",
-        ],
+        ["git", "log", "-1", f"--format=%(trailers:key={TRAILER},valueonly)", f"origin/{head}"],
         tree,
-    ).split()
-    transient = {
-        item_key(i)
-        for i in items
-        if i["status"] == "manual" and i["reason_code"] in TRANSIENT
-    }
-    return sorted(transient & set(said))
+    ).splitlines()
+    return sorted(
+        {
+            f"{item['class']}/{norm(item['pkg'])}"
+            for item in items
+            if item["status"] == "manual"
+            and TRANSIENT & {item["reason_code"], item.get("dependabot_result")}
+            and trailer_value(item) in said
+        }
+    )
 
 
 def closed_unmerged(repo: str, branch: str, head: str, token: str) -> bool:
@@ -194,11 +202,12 @@ def publish(
     items: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Push ``sca-fix/<branch>`` (forced, with a lease on the fetched remote tip) with one
-    commit of ``files`` on the tip of the branch, authored by the fixer identity ``name`` / ``email``, and open or update the
-    pull request. Nothing is pushed when the release branch moved since the checkout
+    commit of ``files`` on the tip of the branch, authored by the fixer identity
+    ``name`` / ``email``, and open or update the pull request. Nothing is pushed when the release branch moved since the checkout
     (``base_moved``, the result has no pull request and the pull request is not touched),
-    the remote fix branch, based on the same tip, holds a fix (``SCA-Fixed`` trailer)
-    that this run has only as a manual item with a transient code (``fix_would_drop``),
+    the remote fix branch, one fixer commit on the same tip, holds a fix (``SCA-Fixed``
+    trailer) that this run has only as a manual item with a transient outcome
+    (``fix_would_drop``),
     or the remote fix branch has commits of others
     (``branch_has_manual_changes``, the result has no pull request) or already holds
     the same tree on the same base (``unchanged``, the pull request is still
@@ -221,13 +230,12 @@ def publish(
             "reason": f"{head} has commits of others, not pushed",
             "reason_code": codes.BRANCH_HAS_MANUAL_CHANGES,
         }
-    if exists and run(["git", "rev-parse", f"origin/{head}^"], tree) == base:
-        if lost := dropped(tree, head, items):
-            return {
-                "action": "none",
-                "reason": f"{head} keeps fixes this run did not reproduce: {', '.join(lost)}",
-                "reason_code": codes.FIX_WOULD_DROP,
-            }
+    if exists and (lost := dropped(tree, branch, head, email, items)):
+        return {
+            "action": "none",
+            "reason": f"{head} keeps fixes this run did not reproduce: {', '.join(lost)}",
+            "reason_code": codes.FIX_WOULD_DROP,
+        }
     run(["git", "checkout", "-B", head], tree)
     run(["git", "add", "--all", "--", *files], tree)
     same_tree = exists and run(["git", "write-tree"], tree) == run(

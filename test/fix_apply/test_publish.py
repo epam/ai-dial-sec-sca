@@ -93,8 +93,21 @@ def run_fixer(
     )
 
 
-def fixed(pkg: str, status: str = "applied", code: str | None = None) -> dict[str, Any]:
-    return {"class": "lang", "pkg": pkg, "status": status, "reason_code": code}
+def fixed(
+    pkg: str,
+    status: str = "applied",
+    code: str | None = None,
+    planned: tuple[str, ...] = ("2.0.0",),
+    result: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "class": "lang",
+        "pkg": pkg,
+        "status": status,
+        "reason_code": code,
+        "planned": list(planned),
+        "dependabot_result": result,
+    }
 
 
 def remote_sha(work: Path) -> str:
@@ -442,6 +455,8 @@ def test_u2_a_url_without_a_number_gives_a_null_number(
     assert pr["number"] is None
 
 
+
+
 def message(work: Path) -> str:
     return git(work, "log", "-1", "--format=%B", f"origin/{FIX}")
 
@@ -449,9 +464,15 @@ def message(work: Path) -> str:
 def test_n7_2_4_the_commit_message_has_a_sorted_trailer_per_applied_item(
     clone: Path, opened: None
 ) -> None:
-    items = [fixed("Zed_lib"), fixed("a.b"), fixed("m", "manual", "needs_major")]
+    items = [
+        fixed("Zed_lib", planned=("3.0.0", "2.1.0")),
+        fixed("a.b", planned=()),
+        fixed("m", "manual", "needs_major"),
+    ]
     run_fixer(clone, items=items)
-    assert message(clone) == "t\n\nSCA-Fixed: lang/a-b\nSCA-Fixed: lang/zed-lib"
+    assert message(clone) == (
+        "t\n\nSCA-Fixed: lang/a-b -\nSCA-Fixed: lang/zed-lib 2.1.0,3.0.0"
+    )
 
 
 def test_n7_2_4_no_applied_item_gives_no_trailer(clone: Path, opened: None) -> None:
@@ -467,18 +488,64 @@ def guarded(clone: Path, monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     return seen
 
 
-def test_n7_2_5a_a_transient_failure_of_a_fixed_package_keeps_the_branch(
-    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    seen = guarded(clone, monkeypatch)
+def held(clone: Path, seen: list[list[str]], items: list[dict[str, Any]]) -> None:
     before = remote_sha(clone)
-    manual = fixed("Lodash", "manual", "dependabot_refused")
-    result = run_fixer(clone, "newer", items=[manual])
+    result = run_fixer(clone, "newer", items=items)
     assert result["action"] == "none"
     assert result["reason_code"] == "fix_would_drop"
     assert "lang/lodash" in result["reason"]
     assert seen == []
     assert remote_sha(clone) == before
+
+
+TRANSIENT_CODES = [
+    "dependabot_refused",
+    "dependabot_no_change",
+    "dependabot_timeout",
+    "dependabot_failed",
+    "override_npm_failed",
+    "rescan_failed",
+    "image_build_failed",
+]
+
+
+@pytest.mark.parametrize("code", TRANSIENT_CODES)
+def test_n7_2_5a_a_transient_reason_code_keeps_the_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    seen = guarded(clone, monkeypatch)
+    held(clone, seen, [fixed("Lodash", "manual", code)])
+
+
+@pytest.mark.parametrize("code", TRANSIENT_CODES)
+def test_n7_2_5a_a_transient_dependabot_result_keeps_the_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    seen = guarded(clone, monkeypatch)
+    manual = fixed("Lodash", "manual", "override_direct", result=code)
+    held(clone, seen, [manual])
+
+
+def test_n7_2_5a_a_hold_comes_before_a_closed_pull_request(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    monkeypatch.setattr(publish_module, "closed_unmerged", lambda *args: True)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "new", items=[manual])
+    assert result["reason_code"] == "fix_would_drop"
+
+
+def test_n7_2_5a_ownership_comes_before_a_hold(clone: Path, opened: None) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    other = other_clone(clone)
+    git(other, "checkout", "-q", FIX)
+    commit_as(other, "dev@x", "hand")
+    git(other, "push", "-q", "origin", FIX)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert result["reason_code"] == "branch_has_manual_changes"
 
 
 @pytest.mark.parametrize(
@@ -487,15 +554,44 @@ def test_n7_2_5a_a_transient_failure_of_a_fixed_package_keeps_the_branch(
         [fixed("lodash", "already_fixed", "not_in_baseline")],
         [fixed("lodash", "manual", "needs_major")],
         [fixed("other", "manual", "dependabot_refused")],
+        [fixed("lodash", "manual", "dependabot_refused", planned=("3.0.0",))],
+        [fixed("lodash", "manual", "dependabot_refused", planned=())],
         [],
     ],
 )
 def test_n7_2_5a_other_outcomes_may_shrink_the_branch(
-    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, items: list[Any]
+    clone: Path, opened: None, items: list[Any]
 ) -> None:
     run_fixer(clone, "new", items=[fixed("lodash")])
     first = remote_sha(clone)
     result = run_fixer(clone, "newer", items=items)
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_branch_with_two_commits_is_rebuilt(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    other = other_clone(clone)
+    git(other, "checkout", "-q", FIX)
+    commit_as(other, APP[1], "second")
+    git(other, "push", "-q", "origin", FIX)
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_commit_of_the_workflow_bot_is_rebuilt(
+    clone: Path, opened: None
+) -> None:
+    bot = ("github-actions[bot]", publish_module.BOT_EMAIL)
+    run_fixer(clone, "new", items=[fixed("lodash")], who=bot)
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
     assert remote_sha(clone) != first
     assert "reason_code" not in result
 

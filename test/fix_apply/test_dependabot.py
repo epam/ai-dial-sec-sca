@@ -4,10 +4,12 @@ from typing import Any
 import pytest
 from builders import item
 from sca.fix.dependabot import (
+    DETAILS_LIMIT,
     JobError,
     docker_job,
     job_directories,
     read_events,
+    redact,
     security_job,
 )
 
@@ -119,3 +121,29 @@ def test_read_events() -> None:
     assert result.error == "boom"
     assert result.error_details == '{"k":["v",1]}'
     assert read_events({"output": None}).files == []
+
+
+@pytest.mark.parametrize(
+    ("text", "plain"),
+    [
+        ("git clone https://user:pass@host/x.git", "git clone https://***@host/x.git"),
+        ("ghp_abc123 gho_x ghs_y ghu_z ghr_w", "*** *** *** *** ***"),
+        ("github_pat_11AB_cd", "***"),
+        ("x-access-token:abc123", "***"),
+        ("Authorization: Bearer abc.def", "Authorization: ***"),
+        ("nothing secret https://host/x", "nothing secret https://host/x"),
+    ],
+)
+def test_u4_error_details_are_redacted(text: str, plain: str) -> None:
+    assert redact(text) == plain
+
+
+def test_u4_error_details_are_redacted_before_the_cut() -> None:
+    secret = "ghp_" + "a" * 50
+    data = {"error-type": "e", "error-details": "x" * (DETAILS_LIMIT - 8) + secret}
+    document = {
+        "output": [{"type": "record_update_job_error", "expect": {"data": data}}]
+    }
+    details = read_events(document).error_details
+    assert details is not None and "ghp_" not in details
+    assert len(details) <= DETAILS_LIMIT

@@ -759,3 +759,9 @@ def test_os_bundle_cves_take_the_vector_of_their_own_record():
 def test_n2_1_5_a_trivy_fixed_version_is_normalised_at_ingest(fixed, plain):
     rows, _ = trivy(result([package("a")], [vuln("a", FixedVersion=fixed)]))
     assert rows[0]["fixed_version"] == plain
+
+
+@pytest.mark.parametrize("fixed", [">=1.0.0 <2.0.0", "~> 5.2.4"])
+def test_n2_1_5_a_range_or_ruby_operator_stays_as_written(fixed):
+    rows, _ = trivy(result([package("a")], [vuln("a", FixedVersion=fixed)]))
+    assert rows[0]["fixed_version"] == fixed

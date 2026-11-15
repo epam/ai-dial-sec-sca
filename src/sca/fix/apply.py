@@ -341,9 +341,9 @@ def apply_override(
     pkg, tree = item["pkg"], journal.tree
     said = record["detail"]
     record["dependabot_result"] = dependabot_result(said)
-    if said != record["dependabot_result"]:
-        record["dependabot_detail"] = said
-    record.setdefault("dependabot_detail", None)
+    record["dependabot_detail"] = record.get("dependabot_detail") or (
+        said if said != record["dependabot_result"] else None
+    )
     settled = settle(record, item, baseline, current, kept)
     if settled:
         return settled, current

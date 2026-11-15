@@ -461,7 +461,7 @@ def test_n9_2_pr_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         json.dumps({"files": ["f"], "items": [], "branch": "b"}), encoding="utf-8"
     )
     failed = {"head": "sca-fix/b", "action": "failed", "reason": "boom"}
-    monkeypatch.setattr(fix_apply, "publish", lambda *args: failed)
+    monkeypatch.setattr(fix_apply, "publish", lambda *args, **kw: failed)
     args = [
         "publish", "--plan", "unused", "--branch", "b", "--tree", str(tmp_path),
         "--repo", "o/r", "--output-dir", str(tmp_path),

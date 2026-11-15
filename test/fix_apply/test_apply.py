@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -151,6 +152,37 @@ def test_dependabot_error_is_the_reason_without_a_fallback(tmp_path: Path) -> No
         ),
     )
     assert result["items"][0]["reason"] == "security_update_not_possible"
+
+
+def test_n9_2_1_dependabot_detail_carries_the_error_details(tmp_path: Path) -> None:
+    record = process_line(
+        line(item(fallback="manual")),
+        "o/r",
+        lockfile_tree(tmp_path),
+        tools(
+            lambda j, m: replace(
+                outcome(error="security_update_not_possible"), error_details="why"
+            ),
+            [{finding()}],
+        ),
+    )["items"][0]
+    assert record["dependabot_detail"] == "why"
+
+
+def test_n9_2_1_dependabot_detail_survives_the_npm_override_path(
+    tmp_path: Path,
+) -> None:
+    one = item()
+    one["relationship"] = "direct"
+    record = process_line(
+        line(one),
+        "o/r",
+        override_tree(tmp_path),
+        tools(lambda j, m: Outcome(error_details="why"), [{finding()}]),
+    )["items"][0]
+    assert record["reason_code"] == "override_direct"
+    assert record["dependabot_result"] == "dependabot_no_change"
+    assert record["dependabot_detail"] == "why"
 
 
 def test_failed_gate_reverts_the_item(tmp_path: Path) -> None:

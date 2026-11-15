@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import posixpath
+import re
 import subprocess
 import tempfile
 import time
@@ -16,6 +17,10 @@ from typing import Any
 from sca.fix import apply_codes as codes
 
 DETAILS_LIMIT = 2000
+SECRETS = re.compile(
+    r"gh[pousr]_\w+|github_pat_\w+|x-access-token:\S+|Bearer \S+"
+)
+USERINFO = re.compile(r"(://)[^/@\s]+@")
 TOKEN_ENV = "LOCAL_GITHUB_ACCESS_TOKEN"
 MANIFESTS = {
     "package-lock.json",
@@ -168,6 +173,11 @@ def docker_job(repo: str, branch: str, directories: Sequence[str]) -> dict[str, 
     }
 
 
+def redact(text: str) -> str:
+    """``text`` without URL credentials, GitHub tokens and bearer values."""
+    return SECRETS.sub("***", USERINFO.sub(r"\1***@", text))
+
+
 def read_events(document: Mapping[str, Any]) -> Outcome:
     """The change and the error of a smoke test file: the files of every
     ``create_pull_request`` event, or the first error, or nothing.
@@ -184,8 +194,8 @@ def read_events(document: Mapping[str, Any]) -> Outcome:
     if errors:
         outcome.error = str(errors[0].get("error-type"))
         if "error-details" in errors[0]:
-            outcome.error_details = json.dumps(
-                errors[0]["error-details"], separators=(",", ":")
+            outcome.error_details = redact(
+                json.dumps(errors[0]["error-details"], separators=(",", ":"))
             )[:DETAILS_LIMIT]
     return outcome
 
