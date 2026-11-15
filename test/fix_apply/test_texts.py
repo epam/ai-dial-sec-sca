@@ -175,6 +175,29 @@ def test_n7_2_summary_says_manual_changes_and_that_the_pr_is_not_edited() -> Non
     ) in text
 
 
+def test_n7_5_summary_names_the_packages_a_hold_kept() -> None:
+    pr = {
+        "action": "none",
+        "reason": "sca-fix/release-1.2 keeps fixes this run did not reproduce: lang/lodash",
+        "reason_code": "fix_would_drop",
+    }
+    text = summary_of({**few_rows(), "pr": pr})
+    assert (
+        "no pull request (fix_would_drop): sca-fix/release-1.2 keeps fixes this run "
+        "did not reproduce: lang/lodash"
+    ) in text
+
+
+def test_n7_5_summary_names_a_line_skipped_with_base_moved() -> None:
+    pr = {
+        "action": "none",
+        "reason": "release-1.2 moved during the run, not pushed",
+        "reason_code": "base_moved",
+    }
+    text = summary_of({**few_rows(), "pr": pr})
+    assert "no pull request (base_moved): release-1.2 moved during the run" in text
+
+
 def test_n7_2_summary_says_unchanged_without_push_and_with_body_update() -> None:
     pr = {"action": "updated", "url": "u", "head": "h", "reason_code": "unchanged"}
     text = summary_of({**few_rows(), "pr": pr})

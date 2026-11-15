@@ -240,3 +240,13 @@ def test_semver_to_calendar_is_a_scheme_change() -> None:
 def test_two_digit_year_keeps_the_semver_major() -> None:
     rec = record("pip", "24.0", "25.0")
     assert upgrade_target("24.0", [rec])[2] == "needs_major"
+
+
+def test_n2_1_5_a_normalised_operator_fix_gives_the_target() -> None:
+    # Trivy `>=4.17.19` (NSWG-ECO-516) and `4.17.21` at the ingest: no version_unparsable
+    rec = record("lodash", "4.17.15", "4.17.19, 4.17.21")
+    assert upgrade_target("4.17.15", [rec]) == (
+        "4.17.19",
+        "lowest fixed version in the same major",
+        None,
+    )

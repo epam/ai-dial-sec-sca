@@ -285,6 +285,8 @@ def apply_security(
     checkpoint = journal.checkpoint()
     changed, left_out = journal.apply(outcome.files)
     if not changed:
+        if outcome.error_details:
+            record["dependabot_detail"] = outcome.error_details
         if outcome.error == NOT_NEEDED:
             # Dependabot's word is not enough: the detector still finds the item
             return fail(record, NOT_NEEDED, codes.DEPENDABOT_REFUSED), current
@@ -339,7 +341,9 @@ def apply_override(
     pkg, tree = item["pkg"], journal.tree
     said = record["detail"]
     record["dependabot_result"] = dependabot_result(said)
-    record["dependabot_detail"] = None if said == record["dependabot_result"] else said
+    record["dependabot_detail"] = record.get("dependabot_detail") or (
+        said if said != record["dependabot_result"] else None
+    )
     settled = settle(record, item, baseline, current, kept)
     if settled:
         return settled, current

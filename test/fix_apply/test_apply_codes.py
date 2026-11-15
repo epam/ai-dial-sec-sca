@@ -32,6 +32,7 @@ N9_2_CODES = {
     "gate_reintroduced",
     "closed_unchanged",
     "base_moved",
+    "fix_would_drop",
     "accepted",
     "not_fixed_in_development",
     "development_data_incomplete",
@@ -457,10 +458,10 @@ def test_n10_2_pr_reason_code(tmp_path: Path, files: list[str], dry: bool, code:
 
 def test_n9_2_pr_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "result.json").write_text(
-        json.dumps({"files": ["f"], "branch": "b"}), encoding="utf-8"
+        json.dumps({"files": ["f"], "items": [], "branch": "b"}), encoding="utf-8"
     )
     failed = {"head": "sca-fix/b", "action": "failed", "reason": "boom"}
-    monkeypatch.setattr(fix_apply, "publish", lambda *args: failed)
+    monkeypatch.setattr(fix_apply, "publish", lambda *args, **kw: failed)
     args = [
         "publish", "--plan", "unused", "--branch", "b", "--tree", str(tmp_path),
         "--repo", "o/r", "--output-dir", str(tmp_path),

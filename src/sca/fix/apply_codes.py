@@ -35,6 +35,7 @@ BRANCH_HAS_MANUAL_CHANGES = "branch_has_manual_changes"
 PR_FAILED = "pr_failed"
 CLOSED_UNCHANGED = "closed_unchanged"
 BASE_MOVED = "base_moved"
+FIX_WOULD_DROP = "fix_would_drop"
 
 CODES = frozenset(
     value

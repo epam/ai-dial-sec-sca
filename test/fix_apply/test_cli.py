@@ -97,7 +97,7 @@ def test_publish_without_files_opens_nothing(tmp_path: Path) -> None:
 
 def test_dry_run_publishes_nothing(tmp_path: Path) -> None:
     (tmp_path / "result.json").write_text(
-        json.dumps({"files": ["f"], "branch": "b"}), encoding="utf-8"
+        json.dumps({"files": ["f"], "items": [], "branch": "b"}), encoding="utf-8"
     )
     fix_apply.main(
         [
@@ -132,7 +132,7 @@ def test_node_command_writes_the_workflow_outputs(
 
 def result_file(tmp_path: Path, **fields: Any) -> None:
     (tmp_path / "result.json").write_text(
-        json.dumps({"files": ["f"], "branch": "b", **fields}), encoding="utf-8"
+        json.dumps({"files": ["f"], "items": [], "branch": "b", **fields}), encoding="utf-8"
     )
 
 
@@ -163,7 +163,7 @@ def test_n7_1_dry_run_comes_before_nothing_applied(tmp_path: Path) -> None:
 def test_n10_2_a_publish_error_still_writes_the_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def broken(*args: Any) -> Any:
+    def broken(*args: Any, **kwargs: Any) -> Any:
         raise fix_apply.PublishError("git push failed: denied")
 
     monkeypatch.setattr(fix_apply, "publish", broken)
@@ -218,7 +218,7 @@ def test_u2_a_published_pull_request_has_a_number_and_a_base(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     created = {"head": "sca-fix/b", "action": "created", "url": "u/pull/5", "number": 5}
-    monkeypatch.setattr(fix_apply, "publish", lambda *args: created)
+    monkeypatch.setattr(fix_apply, "publish", lambda *args, **kw: created)
     result_file(tmp_path)
     assert fix_apply.main(publish_args(tmp_path)) == 0
     written = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))

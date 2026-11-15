@@ -39,7 +39,7 @@ def test_pushes_the_fix_branch_with_only_the_applied_files(
         return {"head": args[2], "action": "created", "url": "u"}
 
     monkeypatch.setattr(publish_module, "open_pull_request", opened)
-    result = publish(clone, "o/r", "release-1.2", ["lock"], "title", clone / "b", "")
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "title", clone / "b", "", items=())
     assert result["action"] == "created"
     assert calls[0][:3] == ("o/r", "release-1.2", "sca-fix/release-1.2")
     files = git(clone, "ls-tree", "-r", "--name-only", "origin/sca-fix/release-1.2")
@@ -57,7 +57,7 @@ def test_a_pull_request_failure_keeps_the_pushed_branch(
         raise PublishError("not permitted")
 
     monkeypatch.setattr(publish_module, "open_pull_request", refused)
-    result = publish(clone, "o/r", "release-1.2", ["lock"], "title", clone / "b", "")
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "title", clone / "b", "", items=())
     assert result == {
         "head": "sca-fix/release-1.2",
         "action": "failed",
@@ -79,11 +79,35 @@ def opened(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(publish_module, "closed_unmerged", lambda *args: False)
 
 
-def run_fixer(work: Path, content: str = "new", who: tuple[str, str] = APP) -> Any:
+def run_fixer(
+    work: Path,
+    content: str = "new",
+    who: tuple[str, str] = APP,
+    items: list[dict[str, Any]] = [],
+) -> Any:
     """One fixer run: a fresh checkout of the release branch with ``lock`` changed."""
     git(work, "checkout", "-f", "-q", "release-1.2")
     (work / "lock").write_text(content, encoding="utf-8")
-    return publish(work, "o/r", "release-1.2", ["lock"], "t", work / "b", "", *who)
+    return publish(
+        work, "o/r", "release-1.2", ["lock"], "t", work / "b", "", *who, items=items
+    )
+
+
+def fixed(
+    pkg: str,
+    status: str = "applied",
+    code: str | None = None,
+    planned: tuple[str, ...] = ("2.0.0",),
+    result: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "class": "lang",
+        "pkg": pkg,
+        "status": status,
+        "reason_code": code,
+        "planned": list(planned),
+        "dependabot_result": result,
+    }
 
 
 def remote_sha(work: Path) -> str:
@@ -183,7 +207,7 @@ def test_n7_2_a_moved_release_branch_gets_a_new_commit(
     git(clone, "fetch", "-q", "origin")
     git(clone, "checkout", "-f", "-q", "-B", "release-1.2", "origin/release-1.2")
     (clone / "lock").write_text("new", encoding="utf-8")
-    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "", *APP)
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "", *APP, items=())
     assert remote_sha(clone) != first
     assert "reason_code" not in result
     assert git(clone, "rev-parse", f"origin/{FIX}^") == git(
@@ -200,7 +224,7 @@ def test_n7_2_a_shallow_checkout_is_told_from_the_history(
         (tmp_path / "remote.git").as_uri(), str(shallow))
     (shallow / "lock").write_text("new", encoding="utf-8")
     before = remote_sha(clone)
-    result = publish(shallow, "o/r", "release-1.2", ["lock"], "t", shallow / "b", "", *APP)
+    result = publish(shallow, "o/r", "release-1.2", ["lock"], "t", shallow / "b", "", *APP, items=())
     assert remote_sha(clone) == before
     assert result["reason_code"] == "unchanged"
 
@@ -301,7 +325,7 @@ def test_n7_2_4_a_moved_release_branch_is_not_pushed_and_the_pr_not_touched(
     monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
     git(clone, "checkout", "-f", "-q", "release-1.2")
     (clone / "lock").write_text("new", encoding="utf-8")
-    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "")
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "", items=())
     assert result["action"] == "none"
     assert result["reason_code"] == "base_moved"
     assert seen == []
@@ -429,3 +453,170 @@ def test_u2_a_url_without_a_number_gives_a_null_number(
     monkeypatch.setattr(publish_module, "run", lambda *args, **kw: next(answers))
     pr = publish_module.open_pull_request("o/r", "b", "h", "t", tmp_path / "b", "")
     assert pr["number"] is None
+
+
+
+
+def message(work: Path) -> str:
+    return git(work, "log", "-1", "--format=%B", f"origin/{FIX}")
+
+
+def test_n7_2_4_the_commit_message_has_a_sorted_trailer_per_applied_item(
+    clone: Path, opened: None
+) -> None:
+    items = [
+        fixed("Zed_lib", planned=("3.0.0", "2.1.0")),
+        fixed("a.b", planned=()),
+        fixed("m", "manual", "needs_major"),
+    ]
+    run_fixer(clone, items=items)
+    assert message(clone) == (
+        "t\n\nSCA-Fixed: lang/a-b -\nSCA-Fixed: lang/zed-lib 2.1.0,3.0.0"
+    )
+
+
+def test_n7_2_4_no_applied_item_gives_no_trailer(clone: Path, opened: None) -> None:
+    run_fixer(clone, items=[fixed("m", "manual", "needs_major")])
+    assert message(clone) == "t"
+
+
+def guarded(clone: Path, monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """A fix branch that holds a proven fix of ``lodash``; no push or PR call after."""
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    seen = pushes(monkeypatch)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    return seen
+
+
+def held(clone: Path, seen: list[list[str]], items: list[dict[str, Any]]) -> None:
+    before = remote_sha(clone)
+    result = run_fixer(clone, "newer", items=items)
+    assert result["action"] == "none"
+    assert result["reason_code"] == "fix_would_drop"
+    assert "lang/lodash" in result["reason"]
+    assert seen == []
+    assert remote_sha(clone) == before
+
+
+TRANSIENT_CODES = [
+    "dependabot_refused",
+    "dependabot_no_change",
+    "dependabot_timeout",
+    "dependabot_failed",
+    "override_npm_failed",
+    "rescan_failed",
+    "image_build_failed",
+]
+
+
+@pytest.mark.parametrize("code", TRANSIENT_CODES)
+def test_n7_2_5a_a_transient_reason_code_keeps_the_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    seen = guarded(clone, monkeypatch)
+    held(clone, seen, [fixed("Lodash", "manual", code)])
+
+
+@pytest.mark.parametrize("code", TRANSIENT_CODES)
+def test_n7_2_5a_a_transient_dependabot_result_keeps_the_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    seen = guarded(clone, monkeypatch)
+    manual = fixed("Lodash", "manual", "override_direct", result=code)
+    held(clone, seen, [manual])
+
+
+def test_n7_2_5a_a_hold_comes_before_a_closed_pull_request(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    monkeypatch.setattr(publish_module, "closed_unmerged", lambda *args: True)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "new", items=[manual])
+    assert result["reason_code"] == "fix_would_drop"
+
+
+def test_n7_2_5a_ownership_comes_before_a_hold(clone: Path, opened: None) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    other = other_clone(clone)
+    git(other, "checkout", "-q", FIX)
+    commit_as(other, "dev@x", "hand")
+    git(other, "push", "-q", "origin", FIX)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert result["reason_code"] == "branch_has_manual_changes"
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [fixed("lodash", "already_fixed", "not_in_baseline")],
+        [fixed("lodash", "manual", "needs_major")],
+        [fixed("other", "manual", "dependabot_refused")],
+        [fixed("lodash", "manual", "dependabot_refused", planned=("3.0.0",))],
+        [fixed("lodash", "manual", "dependabot_refused", planned=())],
+        [],
+    ],
+)
+def test_n7_2_5a_other_outcomes_may_shrink_the_branch(
+    clone: Path, opened: None, items: list[Any]
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    first = remote_sha(clone)
+    result = run_fixer(clone, "newer", items=items)
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_branch_with_two_commits_is_rebuilt(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    other = other_clone(clone)
+    git(other, "checkout", "-q", FIX)
+    commit_as(other, APP[1], "second")
+    git(other, "push", "-q", "origin", FIX)
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_commit_of_the_workflow_bot_is_rebuilt(
+    clone: Path, opened: None
+) -> None:
+    bot = ("github-actions[bot]", publish_module.BOT_EMAIL)
+    run_fixer(clone, "new", items=[fixed("lodash")], who=bot)
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_branch_on_an_older_release_tip_is_rebuilt(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    other = other_clone(clone)
+    commit_as(other, "t@t", "moved")
+    git(other, "push", "-q", "origin", "HEAD:release-1.2")
+    git(clone, "fetch", "-q", "origin", "+release-1.2:release-1.2")
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_branch_without_trailers_is_rebuilt(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new")
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result

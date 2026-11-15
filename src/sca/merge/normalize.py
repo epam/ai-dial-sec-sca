@@ -163,6 +163,23 @@ def package_graph_info(
     }
 
 
+def trivy_fixed(text: str) -> str:
+    """The fixed versions of a Trivy vulnerability as a comma separated list of plain
+    versions: per alternative (split on ``||`` and ``,``) ``>=V``, ``=V``, ``^V`` and
+    ``~V`` (one version) give ``V``, a bare ``<V`` or ``<=V`` gives nothing, any other form stays.
+    """
+    out: list[str] = []
+    for alt in re.split(r"\|\||,", text):
+        alt = alt.strip()
+        if alt.startswith("<"):
+            continue
+        single = re.fullmatch(r"(?:>=|=|\^|~)\s*([^\s>]\S*)", alt)
+        alt = single[1] if single else alt
+        if alt and alt not in out:
+            out.append(alt)
+    return ", ".join(out)
+
+
 def normalize_trivy(
     tid: str, native: Mapping[str, Any], findings: Findings, inventory: Inventory
 ) -> PackageSet:
@@ -229,7 +246,7 @@ def normalize_trivy(
                     if lang
                     else [],
                     "severity": vuln.get("Severity", "UNKNOWN"),
-                    "fixed_version": vuln.get("FixedVersion", ""),
+                    "fixed_version": trivy_fixed(vuln.get("FixedVersion", "")),
                     "dev": graph["dev"],
                     "relationship": graph["relationship"],
                     "chain": graph["chain"],
