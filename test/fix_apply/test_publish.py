@@ -39,7 +39,7 @@ def test_pushes_the_fix_branch_with_only_the_applied_files(
         return {"head": args[2], "action": "created", "url": "u"}
 
     monkeypatch.setattr(publish_module, "open_pull_request", opened)
-    result = publish(clone, "o/r", "release-1.2", ["lock"], "title", clone / "b", "")
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "title", clone / "b", "", items=())
     assert result["action"] == "created"
     assert calls[0][:3] == ("o/r", "release-1.2", "sca-fix/release-1.2")
     files = git(clone, "ls-tree", "-r", "--name-only", "origin/sca-fix/release-1.2")
@@ -57,7 +57,7 @@ def test_a_pull_request_failure_keeps_the_pushed_branch(
         raise PublishError("not permitted")
 
     monkeypatch.setattr(publish_module, "open_pull_request", refused)
-    result = publish(clone, "o/r", "release-1.2", ["lock"], "title", clone / "b", "")
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "title", clone / "b", "", items=())
     assert result == {
         "head": "sca-fix/release-1.2",
         "action": "failed",
@@ -89,7 +89,7 @@ def run_fixer(
     git(work, "checkout", "-f", "-q", "release-1.2")
     (work / "lock").write_text(content, encoding="utf-8")
     return publish(
-        work, "o/r", "release-1.2", ["lock"], "t", work / "b", "", *who, items
+        work, "o/r", "release-1.2", ["lock"], "t", work / "b", "", *who, items=items
     )
 
 
@@ -194,7 +194,7 @@ def test_n7_2_a_moved_release_branch_gets_a_new_commit(
     git(clone, "fetch", "-q", "origin")
     git(clone, "checkout", "-f", "-q", "-B", "release-1.2", "origin/release-1.2")
     (clone / "lock").write_text("new", encoding="utf-8")
-    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "", *APP)
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "", *APP, items=())
     assert remote_sha(clone) != first
     assert "reason_code" not in result
     assert git(clone, "rev-parse", f"origin/{FIX}^") == git(
@@ -211,7 +211,7 @@ def test_n7_2_a_shallow_checkout_is_told_from_the_history(
         (tmp_path / "remote.git").as_uri(), str(shallow))
     (shallow / "lock").write_text("new", encoding="utf-8")
     before = remote_sha(clone)
-    result = publish(shallow, "o/r", "release-1.2", ["lock"], "t", shallow / "b", "", *APP)
+    result = publish(shallow, "o/r", "release-1.2", ["lock"], "t", shallow / "b", "", *APP, items=())
     assert remote_sha(clone) == before
     assert result["reason_code"] == "unchanged"
 
@@ -312,7 +312,7 @@ def test_n7_2_4_a_moved_release_branch_is_not_pushed_and_the_pr_not_touched(
     monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
     git(clone, "checkout", "-f", "-q", "release-1.2")
     (clone / "lock").write_text("new", encoding="utf-8")
-    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "")
+    result = publish(clone, "o/r", "release-1.2", ["lock"], "t", clone / "b", "", items=())
     assert result["action"] == "none"
     assert result["reason_code"] == "base_moved"
     assert seen == []

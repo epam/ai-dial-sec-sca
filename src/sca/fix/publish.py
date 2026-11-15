@@ -190,7 +190,8 @@ def publish(
     token: str,
     name: str = BOT_NAME,
     email: str = BOT_EMAIL,
-    items: Sequence[Mapping[str, Any]] = (),
+    *,
+    items: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Push ``sca-fix/<branch>`` (forced, with a lease on the fetched remote tip) with one
     commit of ``files`` on the tip of the branch, authored by the fixer identity ``name`` / ``email``, and open or update the
