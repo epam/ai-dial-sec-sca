@@ -325,7 +325,9 @@ def run_job(
                 timeout=settings.timeout,
             )
         except subprocess.TimeoutExpired as exc:
-            print(exc.stdout, exc.stderr, file=sys.stderr)
+            for part in (exc.stdout, exc.stderr):
+                if part:
+                    print(part.decode(errors="replace") if isinstance(part, bytes) else part, file=sys.stderr)
             remove_containers(image, settings.proxy_image)
             return Outcome(error=TIMEOUT, seconds=round(time.monotonic() - started))
         seconds = round(time.monotonic() - started)
