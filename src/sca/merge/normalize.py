@@ -171,9 +171,9 @@ def trivy_fixed(text: str) -> str:
     out: list[str] = []
     for alt in re.split(r"\|\||,", text):
         alt = alt.strip()
-        if alt.startswith("<"):
+        if re.fullmatch(r"<=?\s*\S+", alt):
             continue
-        single = re.fullmatch(r"(?:>=|=|\^|~)\s*([^\s>]\S*)", alt)
+        single = re.fullmatch(r"(?:>=|=|\^|~)\s*([^\s<>=~^]\S*)", alt)
         alt = single[1] if single else alt
         if alt and alt not in out:
             out.append(alt)

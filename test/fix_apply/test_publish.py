@@ -517,13 +517,60 @@ def test_n7_2_5a_a_transient_reason_code_keeps_the_branch(
     held(clone, seen, [fixed("Lodash", "manual", code)])
 
 
-@pytest.mark.parametrize("code", TRANSIENT_CODES)
-def test_n7_2_5a_a_transient_dependabot_result_keeps_the_branch(
-    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, code: str
+@pytest.mark.parametrize(
+    "result",
+    [
+        "security_update_not_possible",
+        "security_update_dependency_not_found",
+        "security_update_not_needed",
+        "dependabot_no_change",
+        "dependabot_timeout",
+    ],
+)
+def test_n7_2_5a_a_recorded_fallback_result_keeps_the_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, result: str
 ) -> None:
     seen = guarded(clone, monkeypatch)
-    manual = fixed("Lodash", "manual", "override_direct", result=code)
+    manual = fixed("Lodash", "manual", "override_direct", result=result)
     held(clone, seen, [manual])
+
+
+def test_n7_2_5a_no_result_and_a_nontransient_code_does_not_hold(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "override_direct", result=None)
+    assert "reason_code" not in run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+
+
+def root_commit_on_fix_branch(clone: Path) -> None:
+    other = other_clone(clone)
+    git(other, "checkout", "-q", FIX)
+    git(other, "checkout", "-q", "--orphan", "root")
+    git(other, "-c", f"user.name={APP[0]}", "-c", f"user.email={APP[1]}", "commit", "-qm", "r")
+    git(other, "push", "-qf", "origin", f"root:{FIX}")
+
+
+def test_n7_2_5a_a_root_commit_with_the_same_tree_is_rebuilt_not_an_error(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    root_commit_on_fix_branch(clone)
+    first = remote_sha(clone)
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    assert remote_sha(clone) != first
+
+
+def test_n7_2_5a_a_merge_commit_has_two_parents(clone: Path, opened: None) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    tree = git(clone, "rev-parse", f"origin/{FIX}^{{tree}}")
+    both = [git(clone, "rev-parse", f"origin/{r}") for r in ("release-1.2", FIX)]
+    merge = git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", tree, "-p", both[0], "-p", both[1], "-m", "m")
+    git(clone, "update-ref", "refs/remotes/origin/m", merge)
+    assert publish_module.parents(clone, "m") == both
+    assert publish_module.parents(clone, "release-1.2") == []
 
 
 def test_n7_2_5a_a_hold_comes_before_a_closed_pull_request(
@@ -615,6 +662,68 @@ def test_n7_2_5a_a_branch_without_trailers_is_rebuilt(
     clone: Path, opened: None
 ) -> None:
     run_fixer(clone, "new")
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_raw_security_update_result_on_the_override_path_holds(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = guarded(clone, monkeypatch)
+    manual = fixed(
+        "lodash", "manual", "override_direct", result="security_update_not_possible"
+    )
+    held(clone, seen, [manual])
+
+
+def test_n7_2_5a_an_image_build_failure_of_an_os_item_holds(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    os_item = {**fixed("libssl3"), "class": "os"}
+    run_fixer(clone, "new", items=[os_item])
+    seen = pushes(monkeypatch)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    manual = {**fixed("libssl3", "manual", "image_build_failed"), "class": "os"}
+    before = remote_sha(clone)
+    result = run_fixer(clone, "newer", items=[manual])
+    assert (
+        result["reason_code"] == "fix_would_drop" and "os/libssl3" in result["reason"]
+    )
+    assert seen == [] and remote_sha(clone) == before
+
+
+def test_n7_2_5a_the_trailers_of_reapplied_items_still_hold_the_others(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash"), fixed("minimist")])
+    seen = pushes(monkeypatch)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    items = [fixed("lodash"), fixed("minimist", "manual", "dependabot_failed")]
+    before = remote_sha(clone)
+    result = run_fixer(clone, "newer", items=items)
+    assert result["reason_code"] == "fix_would_drop"
+    assert "lang/minimist" in result["reason"] and "lang/lodash" not in result["reason"]
+    assert seen == [] and remote_sha(clone) == before
+
+
+def test_n7_2_5a_a_root_commit_fix_branch_is_rebuilt(clone: Path, opened: None) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    git(clone, "checkout", "-q", "--orphan", "root")
+    git(clone, "add", "-A")
+    git(
+        clone,
+        "-c",
+        f"user.name={APP[0]}",
+        "-c",
+        f"user.email={APP[1]}",
+        "commit",
+        "-qm",
+        "root",
+    )
+    git(clone, "push", "-qf", "origin", f"root:{FIX}")
     first = remote_sha(clone)
     manual = fixed("lodash", "manual", "dependabot_refused")
     result = run_fixer(clone, "newer", items=[manual])

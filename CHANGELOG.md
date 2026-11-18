@@ -28,6 +28,10 @@ Action inputs and outputs of the existing actions are unchanged, except the new 
 - **BREAKING for direct consumers:** the Gradle init script moved from `actions/generate_gradle_lockfiles/lockfiles.init.gradle` to `src/sca/gradle/lockfiles.init.gradle` and is shipped as package data (a pip install can generate Gradle lockfiles); the old path is gone. The `generate_gradle_lockfiles` action reads it from the new place. The lockfile command of `sca_fix_apply` gets its path in the environment variable `SCA_GRADLE_INIT_SCRIPT`.
 - **BREAKING for direct consumers:** the internal action `actions/_install_trivy` is removed; use `actions/sca_tools`.
 - **BREAKING for direct consumers:** the packages `sca-rules` and `sca-fix-plan` in subdirectories are gone; import `sca.rules` and `sca.plan` from `ai-dial-sec-sca`. The scripts are no longer runnable by path; use `python -m sca <command>`.
+- The fixer publishes no free text from Dependabot: `dependabot_detail` carries only whitelisted package fields of `error-details`, the error type is checked against a list (else `unknown`), the CLI stderr and stdout go to the job log; `redact()` is removed.
+- The fixer hold (`fix_would_drop`) also covers a raw `security_update_*` `dependabot_result` of the npm-override path; a fix branch whose commit has no parent is rebuilt.
+- Trivy fixed versions: only a bare `<V` or `<=V` alternative is dropped; `<2.0 >=1.5`, `~=1.4.2` and `==1.2` stay as written.
+- The release workflow marks a tag below the highest stable version `--latest=false`.
 
 ## v0.8.1
 

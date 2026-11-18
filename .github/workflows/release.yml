@@ -57,5 +57,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           flags=()
-          case "$TAG" in *-rc*|*-a*|*-b*) flags+=(--prerelease);; esac
+          case "$TAG" in
+            *-rc*|*-a*|*-b*) flags+=(--prerelease) ;;
+            *)
+              # an older patch line must not become Latest
+              highest=$(gh release list --exclude-pre-releases --exclude-drafts -L 100 --json tagName --jq '.[].tagName' | { cat; echo "$TAG"; } | sort -V | tail -n1)
+              [ "$highest" = "$TAG" ] || flags+=(--latest=false)
+              ;;
+          esac
           gh release create "$TAG" dist/* --verify-tag --title "$TAG" --generate-notes "${flags[@]}"
