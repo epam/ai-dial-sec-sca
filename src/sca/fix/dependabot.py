@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import os
 import posixpath
-import re
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -17,10 +17,42 @@ from typing import Any
 from sca.fix import apply_codes as codes
 
 DETAILS_LIMIT = 2000
-SECRETS = re.compile(
-    r"gh[pousr]_\w+|github_pat_\w+|x-access-token:\S+|Bearer \S+"
+VALUE_LIMIT = 200
+UNKNOWN_ERROR = "unknown"
+# Dependabot error types the engine publishes; any other type is published as unknown
+ERROR_TYPES = {
+    "all_versions_ignored",
+    "branch_not_found",
+    "dependency_file_content_not_changed",
+    "dependency_file_not_evaluatable",
+    "dependency_file_not_found",
+    "dependency_file_not_parseable",
+    "dependency_file_not_resolvable",
+    "git_dependencies_not_reachable",
+    "git_dependency_reference_not_found",
+    "illformed_requirement",
+    "out_of_disk",
+    "out_of_memory",
+    "path_dependencies_not_reachable",
+    "private_source_authentication_failure",
+    "private_source_certificate_failure",
+    "private_source_timed_out",
+    "security_update_dependency_not_found",
+    "security_update_not_found",
+    "security_update_not_needed",
+    "security_update_not_possible",
+    "server_error",
+    "tooling_error",
+    "update_not_possible",
+}
+# The only fields of ``error-details`` that are published: package data, no free text
+DETAIL_FIELDS = (
+    "dependency-name",
+    "dependency-version",
+    "latest-resolvable-version",
+    "lowest-non-vulnerable-version",
 )
-USERINFO = re.compile(r"(://)[^/@\s]+@")
+CONFLICT_FIELDS = ("name", "version", "requirement", "explanation")
 TOKEN_ENV = "LOCAL_GITHUB_ACCESS_TOKEN"
 MANIFESTS = {
     "package-lock.json",
@@ -173,9 +205,23 @@ def docker_job(repo: str, branch: str, directories: Sequence[str]) -> dict[str, 
     }
 
 
-def redact(text: str) -> str:
-    """``text`` without URL credentials, GitHub tokens and bearer values."""
-    return SECRETS.sub("***", USERINFO.sub(r"\1***@", text))
+def whitelisted(details: Any) -> str | None:
+    """The published form of ``error-details``: the whitelisted fields only (compact
+    JSON, every value and the whole text cut), None when none is present.
+    """
+    if not isinstance(details, Mapping):
+        return None
+    kept: dict[str, Any] = {
+        k: str(details[k])[:VALUE_LIMIT] for k in DETAIL_FIELDS if k in details
+    }
+    conflicts = details.get("conflicting-dependencies")
+    if isinstance(conflicts, list):
+        kept["conflicting-dependencies"] = [
+            {k: str(c[k])[:VALUE_LIMIT] for k in CONFLICT_FIELDS if k in c}
+            for c in conflicts
+            if isinstance(c, Mapping)
+        ]
+    return json.dumps(kept, separators=(",", ":"))[:DETAILS_LIMIT] if kept else None
 
 
 def read_events(document: Mapping[str, Any]) -> Outcome:
@@ -192,11 +238,10 @@ def read_events(document: Mapping[str, Any]) -> Outcome:
         elif event["type"] == "record_update_job_error":
             errors.append(data)
     if errors:
-        outcome.error = str(errors[0].get("error-type"))
-        if "error-details" in errors[0]:
-            outcome.error_details = redact(
-                json.dumps(errors[0]["error-details"], separators=(",", ":"))
-            )[:DETAILS_LIMIT]
+        print(f"dependabot error: {json.dumps(errors[0])}", file=sys.stderr)
+        error = str(errors[0].get("error-type"))
+        outcome.error = error if error in ERROR_TYPES else UNKNOWN_ERROR
+        outcome.error_details = whitelisted(errors[0].get("error-details"))
     return outcome
 
 
@@ -264,9 +309,9 @@ def run_job(
             return Outcome(error=TIMEOUT, seconds=round(time.monotonic() - started))
         seconds = round(time.monotonic() - started)
         if not out_file.is_file():
-            tail = (done.stderr or done.stdout).strip()[-500:]
+            print(done.stdout, done.stderr, file=sys.stderr)
             return Outcome(
-                error=f"dependabot failed (exit {done.returncode}): {tail}",
+                error=f"dependabot failed (exit {done.returncode}), see the job log",
                 seconds=seconds,
             )
         converted = subprocess.run(

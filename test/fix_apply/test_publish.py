@@ -620,3 +620,65 @@ def test_n7_2_5a_a_branch_without_trailers_is_rebuilt(
     result = run_fixer(clone, "newer", items=[manual])
     assert remote_sha(clone) != first
     assert "reason_code" not in result
+
+
+def test_n7_2_5a_a_raw_security_update_result_on_the_override_path_holds(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = guarded(clone, monkeypatch)
+    manual = fixed(
+        "lodash", "manual", "override_direct", result="security_update_not_possible"
+    )
+    held(clone, seen, [manual])
+
+
+def test_n7_2_5a_an_image_build_failure_of_an_os_item_holds(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    os_item = {**fixed("libssl3"), "class": "os"}
+    run_fixer(clone, "new", items=[os_item])
+    seen = pushes(monkeypatch)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    manual = {**fixed("libssl3", "manual", "image_build_failed"), "class": "os"}
+    before = remote_sha(clone)
+    result = run_fixer(clone, "newer", items=[manual])
+    assert (
+        result["reason_code"] == "fix_would_drop" and "os/libssl3" in result["reason"]
+    )
+    assert seen == [] and remote_sha(clone) == before
+
+
+def test_n7_2_5a_the_trailers_of_reapplied_items_still_hold_the_others(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash"), fixed("minimist")])
+    seen = pushes(monkeypatch)
+    monkeypatch.setattr(publish_module, "open_pull_request", pytest.fail)
+    items = [fixed("lodash"), fixed("minimist", "manual", "dependabot_failed")]
+    before = remote_sha(clone)
+    result = run_fixer(clone, "newer", items=items)
+    assert result["reason_code"] == "fix_would_drop"
+    assert "lang/minimist" in result["reason"] and "lang/lodash" not in result["reason"]
+    assert seen == [] and remote_sha(clone) == before
+
+
+def test_n7_2_5a_a_root_commit_fix_branch_is_rebuilt(clone: Path, opened: None) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    git(clone, "checkout", "-q", "--orphan", "root")
+    git(clone, "add", "-A")
+    git(
+        clone,
+        "-c",
+        f"user.name={APP[0]}",
+        "-c",
+        f"user.email={APP[1]}",
+        "commit",
+        "-qm",
+        "root",
+    )
+    git(clone, "push", "-qf", "origin", f"root:{FIX}")
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "dependabot_refused")
+    result = run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+    assert "reason_code" not in result

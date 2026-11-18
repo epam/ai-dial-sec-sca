@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from sca.fix import apply_codes as codes
+from sca.fix.apply import dependabot_code
 from sca.rules import norm
 
 FAILING_STATUSES = (
@@ -133,6 +134,12 @@ def commit_message(title: str, items: Sequence[Mapping[str, Any]]) -> str:
     return f"{title}\n\n{trailers}" if values else title
 
 
+def mapped(said: str | None) -> str | None:
+    """The reason code of a stored Dependabot result (a raw ``security_update_*`` type
+    on the npm-override path)."""
+    return said and dependabot_code(said)
+
+
 def dropped(
     tree: Path, branch: str, head: str, email: str, items: Sequence[Mapping[str, Any]]
 ) -> list[str]:
@@ -141,8 +148,9 @@ def dropped(
     (key and targets) an item of this run has as a manual item with a transient outcome.
     """
     count = run(["git", "rev-list", "--count", f"origin/{branch}..origin/{head}"], tree)
-    parent = run(["git", "rev-parse", f"origin/{head}^"], tree)
-    if count != "1" or parent != run(["git", "rev-parse", f"origin/{branch}"], tree):
+    parents = run(["git", "rev-list", "--parents", "-n1", f"origin/{head}"], tree)
+    tip = run(["git", "rev-parse", f"origin/{branch}"], tree)
+    if count != "1" or parents.split()[1:] != [tip]:
         return []
     if run(["git", "log", "-1", "--format=%ae", f"origin/{head}"], tree).lower() != email.lower():
         return []
@@ -155,7 +163,7 @@ def dropped(
             f"{item['class']}/{norm(item['pkg'])}"
             for item in items
             if item["status"] == "manual"
-            and TRANSIENT & {item["reason_code"], item.get("dependabot_result")}
+            and TRANSIENT & {item["reason_code"], mapped(item.get("dependabot_result"))}
             and trailer_value(item) in said
         }
     )

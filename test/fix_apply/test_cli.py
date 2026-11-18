@@ -230,3 +230,20 @@ def test_u2_a_published_pull_request_has_a_number_and_a_base(
         "action": "created",
         "url": "u/pull/5",
     }
+
+
+def test_n7_2_5a_a_hold_is_written_to_the_result_with_exit_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    held = {
+        "head": "sca-fix/b",
+        "action": "none",
+        "reason": "r",
+        "reason_code": "fix_would_drop",
+    }
+    monkeypatch.setattr(fix_apply, "publish", lambda *args, **kw: held)
+    result_file(tmp_path)
+    assert fix_apply.main(publish_args(tmp_path)) == 0
+    written = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert written["pr"]["action"] == "none"
+    assert written["pr"]["reason_code"] == "fix_would_drop"

@@ -1,3 +1,5 @@
+import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -8,8 +10,10 @@ from sca.fix.dependabot import (
     JobError,
     docker_job,
     job_directories,
+    Settings,
+    UNKNOWN_ERROR,
     read_events,
-    redact,
+    run_job,
     security_job,
 )
 
@@ -118,32 +122,96 @@ def test_read_events() -> None:
     result = read_events(document)
     assert result.files == [{"name": "a"}]
     assert result.dependencies == [{"name": "d"}]
-    assert result.error == "boom"
-    assert result.error_details == '{"k":["v",1]}'
+    assert result.error == "unknown"
+    assert result.error_details is None
     assert read_events({"output": None}).files == []
 
 
-@pytest.mark.parametrize(
-    ("text", "plain"),
-    [
-        ("git clone https://user:pass@host/x.git", "git clone https://***@host/x.git"),
-        ("ghp_abc123 gho_x ghs_y ghu_z ghr_w", "*** *** *** *** ***"),
-        ("github_pat_11AB_cd", "***"),
-        ("x-access-token:abc123", "***"),
-        ("Authorization: Bearer abc.def", "Authorization: ***"),
-        ("nothing secret https://host/x", "nothing secret https://host/x"),
-    ],
-)
-def test_u4_error_details_are_redacted(text: str, plain: str) -> None:
-    assert redact(text) == plain
+def error_document(**data: Any) -> dict[str, Any]:
+    event = {"type": "record_update_job_error", "expect": {"data": data}}
+    return {"output": [event]}
 
 
-def test_u4_error_details_are_redacted_before_the_cut() -> None:
-    secret = "ghp_" + "a" * 50
-    data = {"error-type": "e", "error-details": "x" * (DETAILS_LIMIT - 8) + secret}
-    document = {
-        "output": [{"type": "record_update_job_error", "expect": {"data": data}}]
+def test_u4_error_details_keep_the_whitelisted_package_fields() -> None:
+    fields = {
+        "dependency-name": "lodash",
+        "dependency-version": "1.0.0",
+        "latest-resolvable-version": "1.5.0",
+        "lowest-non-vulnerable-version": "2.0.0",
     }
-    details = read_events(document).error_details
-    assert details is not None and "ghp_" not in details
-    assert len(details) <= DETAILS_LIMIT
+    data = {"error-type": "security_update_not_possible", "error-details": fields}
+    assert json.loads(read_events(error_document(**data)).error_details) == fields
+
+
+def test_u4_conflicting_dependencies_keep_four_keys() -> None:
+    conflict = {
+        "name": "a",
+        "version": "1",
+        "requirement": "^1",
+        "explanation": "a needs b",
+        "source": "x",
+        "dependency-urls": ["u"],
+    }
+    data = {
+        "error-type": "e",
+        "error-details": {"conflicting-dependencies": [conflict]},
+    }
+    kept = json.loads(read_events(error_document(**data)).error_details)
+    assert kept == {
+        "conflicting-dependencies": [
+            {
+                "name": "a",
+                "version": "1",
+                "requirement": "^1",
+                "explanation": "a needs b",
+            }
+        ]
+    }
+
+
+def test_u4_free_form_fields_are_dropped() -> None:
+    details = {
+        "dependency-name": "a",
+        "error-message": "token ghs_ABC",
+        "error-backtrace": "trace",
+        "message": "m",
+        "source": "s",
+        "dependency-urls": ["u"],
+    }
+    data = {"error-type": "e", "error-details": details}
+    assert json.loads(read_events(error_document(**data)).error_details) == {
+        "dependency-name": "a"
+    }
+
+
+@pytest.mark.parametrize("details", [None, "text ghs_ABC", {"error-message": "m"}])
+def test_u4_details_without_a_whitelisted_field_give_none(details: Any) -> None:
+    data = {"error-type": "e", "error-details": details}
+    assert read_events(error_document(**data)).error_details is None
+
+
+def test_u4_error_details_are_cut() -> None:
+    details = {"dependency-name": "x" * 5000}
+    data = {"error-type": "e", "error-details": details}
+    published = read_events(error_document(**data)).error_details
+    assert published is not None and len(published) <= DETAILS_LIMIT
+
+
+def test_u4_an_unknown_error_type_is_published_as_unknown() -> None:
+    data = {"error-type": "ghs_ABC surprise"}
+    assert read_events(error_document(**data)).error == UNKNOWN_ERROR
+    data = {"error-type": "security_update_not_possible"}
+    assert read_events(error_document(**data)).error == "security_update_not_possible"
+
+
+def test_u4_the_cli_output_goes_to_the_job_log_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def failed(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 3, "out", "token ghs_ABC")
+
+    monkeypatch.setattr(subprocess, "run", failed)
+    settings = Settings("dependabot", {"pip": "image"}, "proxy")
+    result = run_job({}, tmp_path, settings, "pip")
+    assert result.error == "dependabot failed (exit 3), see the job log"
+    assert "ghs_ABC" in capsys.readouterr().err

@@ -1,3 +1,4 @@
+import io
 import json
 from dataclasses import replace
 from collections.abc import Callable, Mapping
@@ -7,8 +8,9 @@ from typing import Any
 import pytest
 from sca.fix.apply import Tools, process_line
 from builders import file, finding, item, line, outcome, tools
-from sca.fix.dependabot import TIMEOUT, JobError, Outcome
+from sca.fix.dependabot import TIMEOUT, JobError, Outcome, read_events
 from sca.fix.scan import BuildError, Finding, ScanError
+from sca.fix.texts import pr_body
 
 
 def tree_with(tmp_path: Path, **files: str) -> Path:
@@ -183,6 +185,54 @@ def test_n9_2_1_dependabot_detail_survives_the_npm_override_path(
     assert record["reason_code"] == "override_direct"
     assert record["dependabot_result"] == "dependabot_no_change"
     assert record["dependabot_detail"] == "why"
+
+
+def test_u4_no_free_form_dependabot_text_reaches_the_result_or_the_pr_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "ghs_ABC"
+    event = {
+        "type": "record_update_job_error",
+        "expect": {
+            "data": {
+                "error-type": "security_update_not_possible",
+                "error-details": {
+                    "dependency-name": "hono",
+                    "latest-resolvable-version": "2.0.13",
+                    "error-message": f"clone failed with {secret}",
+                    "error-backtrace": secret,
+                    "conflicting-dependencies": [{"name": "a", "source": secret}],
+                },
+            }
+        },
+    }
+    monkeypatch.setattr("sys.stderr", io.StringIO())
+    result = process_line(
+        line(item(fallback="manual")),
+        "o/r",
+        lockfile_tree(tmp_path),
+        tools(lambda j, m: read_events({"output": [event]}), [{finding()}]),
+    )
+    record = result["items"][0]
+    assert (
+        json.loads(record["dependabot_detail"])["latest-resolvable-version"] == "2.0.13"
+    )
+    result.update(branch="b", ref="r")
+    published = json.dumps(result) + pr_body(line(item()), result, "success")
+    assert secret not in published and "clone failed" not in published
+
+
+def test_u4_a_failed_cli_gives_the_fixed_message_without_its_output(
+    tmp_path: Path,
+) -> None:
+    said = "dependabot failed (exit 3), see the job log"
+    record = process_line(
+        line(item(fallback="manual")),
+        "o/r",
+        lockfile_tree(tmp_path),
+        tools(lambda j, m: Outcome(error=said), [{finding()}]),
+    )["items"][0]
+    assert record["reason"] == said and record["reason_code"] == "dependabot_failed"
 
 
 def test_failed_gate_reverts_the_item(tmp_path: Path) -> None:
