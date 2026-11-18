@@ -567,7 +567,7 @@ def test_n7_2_5a_a_merge_commit_has_two_parents(clone: Path, opened: None) -> No
     run_fixer(clone, "new", items=[fixed("lodash")])
     tree = git(clone, "rev-parse", f"origin/{FIX}^{{tree}}")
     both = [git(clone, "rev-parse", f"origin/{r}") for r in ("release-1.2", FIX)]
-    merge = git(clone, "commit-tree", tree, "-p", both[0], "-p", both[1], "-m", "m")
+    merge = git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", tree, "-p", both[0], "-p", both[1], "-m", "m")
     git(clone, "update-ref", "refs/remotes/origin/m", merge)
     assert publish_module.parents(clone, "m") == both
     assert publish_module.parents(clone, "release-1.2") == []
