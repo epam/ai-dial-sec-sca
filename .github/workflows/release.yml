@@ -61,7 +61,7 @@ jobs:
             *-rc*|*-a*|*-b*) flags+=(--prerelease) ;;
             *)
               # an older patch line must not become Latest
-              highest=$(gh release list --exclude-pre-releases --json tagName --jq '.[].tagName' | { cat; echo "$TAG"; } | sort -V | tail -n1)
+              highest=$(gh release list --exclude-pre-releases --exclude-drafts -L 100 --json tagName --jq '.[].tagName' | { cat; echo "$TAG"; } | sort -V | tail -n1)
               [ "$highest" = "$TAG" ] || flags+=(--latest=false)
               ;;
           esac

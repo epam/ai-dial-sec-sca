@@ -517,13 +517,60 @@ def test_n7_2_5a_a_transient_reason_code_keeps_the_branch(
     held(clone, seen, [fixed("Lodash", "manual", code)])
 
 
-@pytest.mark.parametrize("code", TRANSIENT_CODES)
-def test_n7_2_5a_a_transient_dependabot_result_keeps_the_branch(
-    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, code: str
+@pytest.mark.parametrize(
+    "result",
+    [
+        "security_update_not_possible",
+        "security_update_dependency_not_found",
+        "security_update_not_needed",
+        "dependabot_no_change",
+        "dependabot_timeout",
+    ],
+)
+def test_n7_2_5a_a_recorded_fallback_result_keeps_the_branch(
+    clone: Path, opened: None, monkeypatch: pytest.MonkeyPatch, result: str
 ) -> None:
     seen = guarded(clone, monkeypatch)
-    manual = fixed("Lodash", "manual", "override_direct", result=code)
+    manual = fixed("Lodash", "manual", "override_direct", result=result)
     held(clone, seen, [manual])
+
+
+def test_n7_2_5a_no_result_and_a_nontransient_code_does_not_hold(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    first = remote_sha(clone)
+    manual = fixed("lodash", "manual", "override_direct", result=None)
+    assert "reason_code" not in run_fixer(clone, "newer", items=[manual])
+    assert remote_sha(clone) != first
+
+
+def root_commit_on_fix_branch(clone: Path) -> None:
+    other = other_clone(clone)
+    git(other, "checkout", "-q", FIX)
+    git(other, "checkout", "-q", "--orphan", "root")
+    git(other, "-c", f"user.name={APP[0]}", "-c", f"user.email={APP[1]}", "commit", "-qm", "r")
+    git(other, "push", "-qf", "origin", f"root:{FIX}")
+
+
+def test_n7_2_5a_a_root_commit_with_the_same_tree_is_rebuilt_not_an_error(
+    clone: Path, opened: None
+) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    root_commit_on_fix_branch(clone)
+    first = remote_sha(clone)
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    assert remote_sha(clone) != first
+
+
+def test_n7_2_5a_a_merge_commit_has_two_parents(clone: Path, opened: None) -> None:
+    run_fixer(clone, "new", items=[fixed("lodash")])
+    tree = git(clone, "rev-parse", f"origin/{FIX}^{{tree}}")
+    both = [git(clone, "rev-parse", f"origin/{r}") for r in ("release-1.2", FIX)]
+    merge = git(clone, "commit-tree", tree, "-p", both[0], "-p", both[1], "-m", "m")
+    git(clone, "update-ref", "refs/remotes/origin/m", merge)
+    assert publish_module.parents(clone, "m") == both
+    assert publish_module.parents(clone, "release-1.2") == []
 
 
 def test_n7_2_5a_a_hold_comes_before_a_closed_pull_request(

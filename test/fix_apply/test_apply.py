@@ -346,6 +346,23 @@ def test_docker_step_applies_when_the_image_rescan_proves_it(tmp_path: Path) -> 
     assert (tree / "Dockerfile").read_text(encoding="utf-8") == "FROM a:2\n"
 
 
+def test_n9_2_1_docker_step_keeps_the_whitelisted_error_details(tmp_path: Path) -> None:
+    result = process_line(
+        line(os_item()),
+        "o/r",
+        docker_tree(tmp_path),
+        tools(
+            lambda job, manager: Outcome(
+                error="security_update_not_needed", error_details='{"dependency-name":"a"}'
+            ),
+            [],
+        ),
+    )
+    record = result["items"][0]
+    assert record["reason_code"] == "dependabot_refused"
+    assert record["dependabot_detail"] == '{"dependency-name":"a"}'
+
+
 def test_docker_step_is_reverted_when_nothing_is_proven(tmp_path: Path) -> None:
     tree = docker_tree(tmp_path)
     vuln = finding("brotli-libs", cls="os")

@@ -42,8 +42,28 @@ ERROR_TYPES = {
     "security_update_not_needed",
     "security_update_not_possible",
     "server_error",
-    "tooling_error",
     "update_not_possible",
+    "registry_unreachable",
+    "private_source_bad_response",
+    "dependency_not_found",
+    "inconsistent_registry_response",
+    "dependency_file_not_supported",
+    "misconfigured_tooling",
+    "tool_version_not_supported",
+    "tool_feature_not_supported",
+    "unknown_error",
+    "octokit_rate_limited",
+    "git_token_auth_error",
+    "registry_error",
+    "pull_request_exists_for_security_update",
+    "pull_request_exists_for_latest_version",
+    "directory_not_found",
+    "file_fetcher_error",
+    "job_repo_not_found",
+    "not_implemented",
+    "missing_environment_variable",
+    "blocked_dependency_version",
+    "unexpected_external_code",
 }
 # The only fields of ``error-details`` that are published: package data, no free text
 DETAIL_FIELDS = (
@@ -304,7 +324,8 @@ def run_job(
                 text=True,
                 timeout=settings.timeout,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            print(exc.stdout, exc.stderr, file=sys.stderr)
             remove_containers(image, settings.proxy_image)
             return Outcome(error=TIMEOUT, seconds=round(time.monotonic() - started))
         seconds = round(time.monotonic() - started)
@@ -321,9 +342,8 @@ def run_job(
             text=True,
         )
         if converted.returncode != 0:
-            raise JobError(
-                f"cannot read the job output: {converted.stderr.strip()[-300:]}"
-            )
+            print(converted.stderr, file=sys.stderr)
+            raise JobError("cannot read the job output, see the job log")
         outcome = read_events(json.loads(converted.stdout))
         outcome.seconds = seconds
         return outcome

@@ -129,7 +129,7 @@ def dependabot_code(detail: str) -> str:
     """
     if detail == NO_CHANGE:
         return codes.DEPENDABOT_NO_CHANGE
-    if detail in REFUSALS:
+    if detail in REFUSALS or detail == NOT_NEEDED:
         return codes.DEPENDABOT_REFUSED
     if detail == TIMEOUT:
         return codes.DEPENDABOT_TIMEOUT
@@ -450,10 +450,12 @@ def apply_docker(
     }
 
     def all_manual(
-        reason: str, code: str
+        reason: str, code: str, said: str | None = None
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         for record in records:
             record["reason"], record["reason_code"] = reason, code
+            if said:
+                record["dependabot_detail"] = said
         return records, step
 
     files = dockerfiles(journal.tree)
@@ -467,7 +469,7 @@ def apply_docker(
     changed, _ = journal.apply(outcome.files)
     if not changed:
         detail = outcome.error or NO_CHANGE
-        return all_manual(detail, dependabot_code(detail))
+        return all_manual(detail, dependabot_code(detail), outcome.error_details)
     journal.restore(checkpoint)
     built = [p for p in changed if p in files]
     if not built:

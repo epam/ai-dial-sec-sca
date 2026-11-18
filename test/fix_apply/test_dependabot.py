@@ -204,6 +204,37 @@ def test_u4_an_unknown_error_type_is_published_as_unknown() -> None:
     assert read_events(error_document(**data)).error == "security_update_not_possible"
 
 
+def test_u4_a_timeout_logs_the_partial_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def slow(command: list[str], **kwargs: Any) -> Any:
+        if command[0] != "dependabot":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        raise subprocess.TimeoutExpired(command, 1, "partial out", "partial err")
+
+    monkeypatch.setattr(subprocess, "run", slow)
+    settings = Settings("dependabot", {"pip": "image"}, "proxy")
+    assert run_job({}, tmp_path, settings, "pip").error == "dependabot_timeout"
+    assert "partial err" in capsys.readouterr().err
+
+
+def test_u4_a_yq_failure_gives_a_fixed_message_and_logs_the_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[0] == "yq":
+            return subprocess.CompletedProcess(command, 1, "", "bad ghs_ABC")
+        Path(command[command.index("-o") + 1]).write_text("x", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    settings = Settings("dependabot", {"pip": "image"}, "proxy")
+    with pytest.raises(JobError, match="see the job log") as raised:
+        run_job({}, tmp_path, settings, "pip")
+    assert "ghs_ABC" not in str(raised.value)
+    assert "ghs_ABC" in capsys.readouterr().err
+
+
 def test_u4_the_cli_output_goes_to_the_job_log_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

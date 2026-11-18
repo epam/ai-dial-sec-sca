@@ -134,6 +134,11 @@ def commit_message(title: str, items: Sequence[Mapping[str, Any]]) -> str:
     return f"{title}\n\n{trailers}" if values else title
 
 
+def parents(tree: Path, head: str) -> list[str]:
+    """The parent commits of ``origin/<head>`` (none for a root commit)."""
+    return run(["git", "rev-list", "--parents", "-n1", f"origin/{head}"], tree).split()[1:]
+
+
 def mapped(said: str | None) -> str | None:
     """The reason code of a stored Dependabot result (a raw ``security_update_*`` type
     on the npm-override path)."""
@@ -148,9 +153,8 @@ def dropped(
     (key and targets) an item of this run has as a manual item with a transient outcome.
     """
     count = run(["git", "rev-list", "--count", f"origin/{branch}..origin/{head}"], tree)
-    parents = run(["git", "rev-list", "--parents", "-n1", f"origin/{head}"], tree)
     tip = run(["git", "rev-parse", f"origin/{branch}"], tree)
-    if count != "1" or parents.split()[1:] != [tip]:
+    if count != "1" or parents(tree, head) != [tip]:
         return []
     if run(["git", "log", "-1", "--format=%ae", f"origin/{head}"], tree).lower() != email.lower():
         return []
@@ -259,7 +263,7 @@ def publish(
                 }
         except PublishError as exc:
             return {"head": head, "action": "failed", "reason": str(exc)}
-    unchanged = same_tree and run(["git", "rev-parse", f"origin/{head}^"], tree) == base
+    unchanged = same_tree and parents(tree, head) == [base]
     if not unchanged:
         run(
             [
