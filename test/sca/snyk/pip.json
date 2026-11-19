@@ -1,0 +1,94 @@
+[
+  {
+    "vulnerabilities": [
+      {
+        "id": "SNYK-PYTHON-DJANGO-6000003",
+        "packageName": "Django",
+        "version": "4.2.1",
+        "severity": "high",
+        "cvssScore": 8.1,
+        "fixedIn": [
+          "4.2.14",
+          "5.0.7"
+        ],
+        "identifiers": {
+          "CVE": [
+            "CVE-2026-3001"
+          ],
+          "GHSA": [
+            "GHSA-jjjj-kkkk-llll"
+          ],
+          "CWE": [
+            "CWE-89"
+          ]
+        },
+        "publicationTime": "2026-10-30T00:00:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "SQL Injection",
+        "exploit": "Not Defined",
+        "from": [
+          "root@1.0.0",
+          "Django@4.2.1"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      },
+      {
+        "id": "SNYK-PYTHON-PILLOW-6000004",
+        "packageName": "pillow",
+        "version": "9.5.0",
+        "severity": "medium",
+        "cvssScore": 5.5,
+        "fixedIn": [
+          "10.0.1"
+        ],
+        "identifiers": {
+          "CVE": [
+            "CVE-2026-3002"
+          ],
+          "GHSA": [],
+          "CWE": [
+            "CWE-120"
+          ]
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Buffer Overflow",
+        "exploit": "Not Defined",
+        "from": [
+          "root@1.0.0",
+          "pillow@9.5.0"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      },
+      {
+        "id": "SNYK-PYTHON-REQUESTS-6000005",
+        "packageName": "Requests",
+        "version": "2.25.0",
+        "severity": "weird",
+        "cvssScore": null,
+        "fixedIn": [],
+        "identifiers": {
+          "CVE": [],
+          "GHSA": [],
+          "CWE": []
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Odd rating",
+        "exploit": null,
+        "from": [
+          "root@1.0.0",
+          "Requests@2.25.0"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      }
+    ],
+    "ok": false,
+    "dependencyCount": 64,
+    "packageManager": "pip",
+    "targetFile": "requirements.txt",
+    "displayTargetFile": "requirements.txt",
+    "path": "/work/repo",
+    "summary": "3 vulnerable paths"
+  }
+]

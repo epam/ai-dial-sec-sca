@@ -1,0 +1,136 @@
+{
+ "schema_version": 4,
+ "engine": null,
+ "repo": "example/app",
+ "host": "github.com",
+ "commit_sha": "0123456789abcdef",
+ "default_branch": "development",
+ "run_id": "",
+ "run_attempt": null,
+ "run_url": "",
+ "generated_utc": "2026-11-19T05:30:00Z",
+ "tools": {
+  "trivy": null,
+  "trivy_db": null,
+  "trivy_java_db": null,
+  "osv_scanner": null,
+  "osv_queried_at": null,
+  "snyk": "1.1300.0"
+ },
+ "targets": [
+  {
+   "id": "snyk:package-lock.json",
+   "scanner": "snyk",
+   "kind": "fs",
+   "ref": "development",
+   "commit_sha": "0123456789abcdef",
+   "image": null,
+   "image_digest": null,
+   "status": "ok",
+   "reason": null,
+   "packages_scanned": 843,
+   "os": null
+  }
+ ],
+ "findings": [],
+ "versions": [
+  {
+   "ref": "development",
+   "kind": "development",
+   "latest": false,
+   "status": "ok",
+   "targets": [
+    "snyk:package-lock.json"
+   ],
+   "counts": {
+    "c": 1,
+    "h": 1,
+    "m": 0,
+    "l": 0,
+    "unknown": 0,
+    "all": 2,
+    "fixable": 2
+   },
+   "vulns": [
+    {
+     "id": "CVE-2026-2002",
+     "names": [
+      "CVE-2026-2002",
+      "SNYK-JS-BABELTRAVERSE-6000002"
+     ],
+     "pkg": "@babel/traverse",
+     "pkg_key": "@babel/traverse",
+     "class": "lang",
+     "severity": "CRITICAL",
+     "fixed": "7.23.2",
+     "dev": true,
+     "installed": [
+      "7.22.0"
+     ],
+     "where": [
+      "snyk:package-lock.json"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-03-02",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": 9.3,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [
+      "SNYK-JS-BABELTRAVERSE-6000002"
+     ],
+     "ecosystem": "npm",
+     "title": "Arbitrary Code Execution",
+     "exploit": "Functional",
+     "cwe": [
+      "CWE-697"
+     ]
+    },
+    {
+     "id": "CVE-2026-2001",
+     "names": [
+      "CVE-2026-2001",
+      "GHSA-gggg-hhhh-iiii",
+      "SNYK-JS-LODASH-6000001"
+     ],
+     "pkg": "lodash",
+     "pkg_key": "lodash",
+     "class": "lang",
+     "severity": "HIGH",
+     "fixed": "4.17.21",
+     "dev": false,
+     "installed": [
+      "4.17.20"
+     ],
+     "where": [
+      "snyk:package-lock.json"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-03-02",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": 7.4,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [
+      "GHSA-gggg-hhhh-iiii",
+      "SNYK-JS-LODASH-6000001"
+     ],
+     "ecosystem": "npm",
+     "title": "Prototype Pollution",
+     "exploit": "Not Defined",
+     "cwe": [
+      "CWE-1321"
+     ]
+    }
+   ]
+  }
+ ]
+}

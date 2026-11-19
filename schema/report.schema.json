@@ -31,7 +31,8 @@
         "trivy_java_db": {"type": ["string", "null"]},
         "osv_scanner": {"type": ["string", "null"]},
         "osv_queried_at": {"type": ["string", "null"]},
-        "oras": {"type": ["string", "null"], "description": "Additive."}
+        "oras": {"type": ["string", "null"], "description": "Additive."},
+        "snyk": {"type": ["string", "null"], "description": "Additive. Snyk CLI version of an imported Snyk report."}
       }
     },
     "targets": {"type": "array", "items": {"$ref": "#/$defs/target"}},
@@ -51,7 +52,7 @@
       "required": ["id", "scanner", "kind", "ref", "status", "reason", "packages_scanned"],
       "properties": {
         "id": {"type": "string"},
-        "scanner": {"enum": ["trivy", "osv"]},
+        "scanner": {"enum": ["trivy", "osv", "snyk"]},
         "kind": {"enum": ["fs", "image"]},
         "ref": {"type": ["string", "null"], "description": "Git ref or image tag (git_ref, else tag of the target)."},
         "commit_sha": {"type": ["string", "null"]},
@@ -146,7 +147,7 @@
         "dev": {"type": "boolean"},
         "installed": {"$ref": "#/$defs/strings"},
         "where": {"$ref": "#/$defs/strings", "description": "Target ids."},
-        "sources": {"type": "array", "items": {"enum": ["trivy", "osv"]}},
+        "sources": {"type": "array", "items": {"enum": ["trivy", "osv", "snyk"]}},
         "published": {"type": ["string", "null"]},
         "modified": {"type": ["string", "null"]},
         "cvss": {"$ref": "#/$defs/cvss"},
@@ -155,6 +156,8 @@
         "relationship": {"type": ["string", "null"]},
         "locations": {"$ref": "#/$defs/strings"},
         "title": {"type": ["string", "null"], "description": "Since v0.8.0."},
+        "exploit": {"type": ["string", "null"], "description": "Additive, Snyk records: the exploit maturity."},
+        "cwe": {"$ref": "#/$defs/strings", "description": "Additive, Snyk records."},
         "accepted": {"type": ["object", "null"], "properties": {"until": {"type": "string"}}},
         "upgrades": {
           "type": "array",

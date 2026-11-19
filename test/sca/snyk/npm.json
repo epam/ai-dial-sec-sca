@@ -1,0 +1,103 @@
+{
+  "vulnerabilities": [
+    {
+      "id": "SNYK-JS-LODASH-6000001",
+      "packageName": "lodash",
+      "version": "4.17.20",
+      "severity": "high",
+      "cvssScore": 7.4,
+      "fixedIn": [
+        "4.17.21"
+      ],
+      "identifiers": {
+        "CVE": [
+          "CVE-2026-2001"
+        ],
+        "GHSA": [
+          "GHSA-gggg-hhhh-iiii"
+        ],
+        "CWE": [
+          "CWE-1321"
+        ]
+      },
+      "publicationTime": "2026-03-02T10:15:00.000Z",
+      "modificationTime": "2026-04-01T08:00:00.000Z",
+      "title": "Prototype Pollution",
+      "exploit": "Not Defined",
+      "from": [
+        "web@2.0.0",
+        "lodash@4.17.20"
+      ],
+      "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    },
+    {
+      "id": "SNYK-JS-BABELTRAVERSE-6000002",
+      "packageName": "@babel/traverse",
+      "version": "7.22.0",
+      "severity": "critical",
+      "cvssScore": 9.3,
+      "fixedIn": [
+        "7.23.2"
+      ],
+      "identifiers": {
+        "CVE": [
+          "CVE-2026-2002"
+        ],
+        "GHSA": [],
+        "CWE": [
+          "CWE-697"
+        ]
+      },
+      "publicationTime": "2026-03-02T10:15:00.000Z",
+      "modificationTime": "2026-04-01T08:00:00.000Z",
+      "title": "Arbitrary Code Execution",
+      "exploit": "Functional",
+      "from": [
+        "web@2.0.0",
+        "jest@29.0.0",
+        "@babel/traverse@7.22.0"
+      ],
+      "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "dev": true
+    },
+    {
+      "id": "SNYK-JS-LODASH-6000001",
+      "packageName": "lodash",
+      "version": "4.17.20",
+      "severity": "high",
+      "cvssScore": 7.4,
+      "fixedIn": [
+        "4.17.21"
+      ],
+      "identifiers": {
+        "CVE": [
+          "CVE-2026-2001"
+        ],
+        "GHSA": [
+          "GHSA-gggg-hhhh-iiii"
+        ],
+        "CWE": [
+          "CWE-1321"
+        ]
+      },
+      "publicationTime": "2026-03-02T10:15:00.000Z",
+      "modificationTime": "2026-04-01T08:00:00.000Z",
+      "title": "Prototype Pollution",
+      "exploit": "Not Defined",
+      "from": [
+        "web@2.0.0",
+        "jest@29.0.0",
+        "lodash@4.17.20"
+      ],
+      "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+  ],
+  "ok": false,
+  "dependencyCount": 843,
+  "packageManager": "npm",
+  "targetFile": "package-lock.json",
+  "displayTargetFile": "package-lock.json",
+  "path": "/work/repo",
+  "summary": "3 vulnerable paths",
+  "org": "acme"
+}
