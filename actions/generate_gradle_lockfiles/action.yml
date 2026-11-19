@@ -1,5 +1,5 @@
 name: Generate Gradle lockfiles
-description: Resolve all dependencies of a Gradle build and write them to gradle.lockfile files, together with the resolved dependency graph of every project as JSON files (build files are not modified), so that dependency scanners such as Trivy can scan them and trace findings to the dependencies that brought them in. Requires Java and Gradle to be set up beforehand (see java_prepare)
+description: Resolve all dependencies of a Gradle build and write them to gradle.lockfile files, together with the resolved dependency graph of every project as JSON files (build files are not modified), so that dependency scanners such as Trivy can scan them and trace findings to the dependencies that brought them in. Runs Gradle on the JDK that its wrapper version supports (sca java); requires the Temurin JDKs 11, 17, 21 and 25 installed beforehand (JAVA_HOME_<version>_X64 or _ARM64 set, as by actions/setup-java)
 inputs:
   working-directory:
     description: Directory of the Gradle build (where gradlew is located)
@@ -32,6 +32,7 @@ runs:
         GPR_USERNAME: ${{ inputs.gpr-username }}
         GPR_PASSWORD: ${{ inputs.gpr-password }}
         GRAPH_DIR: ${{ inputs.graph-dir || format('{0}/gradle-graph', runner.temp) }}
+        PYTHONPATH: ${{ github.action_path }}/../../src
       run: |
         # The graph files of an earlier run would be mixed up with the new ones
         if [ -d "$GRAPH_DIR" ] && [ -n "$(ls -A "$GRAPH_DIR")" ]; then
@@ -39,6 +40,11 @@ runs:
           exit 1
         fi
         mkdir -p "$GRAPH_DIR"
+        # The JDK that the wrapper Gradle runs on; the JDK set stays detectable for toolchains
+        choice=$(python -P -m sca java . --setup) || { echo "::error::$(printf '%s' "$choice" | jq -r .reason)"; exit 1; }
+        printf '%s' "$choice" | jq -r .reason
+        export JAVA_HOME=$(printf '%s' "$choice" | jq -r .java_home)
+        export PATH="$JAVA_HOME/bin:$PATH"
         ./gradlew --no-daemon --init-script "$GITHUB_ACTION_PATH/../../src/sca/gradle/lockfiles.init.gradle" -Pai.dial.sca.graphDir="$GRAPH_DIR" resolveAndLockAllConfigurations --write-locks \
           || { echo "::error::Gradle failed to resolve dependencies"; exit 1; }
         count=$(find . -name gradle.lockfile -type f | wc -l)
