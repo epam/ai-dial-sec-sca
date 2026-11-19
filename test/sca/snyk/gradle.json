@@ -1,0 +1,247 @@
+[
+  {
+    "vulnerabilities": [
+      {
+        "id": "SNYK-JAVA-COMFASTERXMLJACKSONCORE-7569538",
+        "packageName": "com.fasterxml.jackson.core:jackson-databind",
+        "version": "2.15.2",
+        "severity": "high",
+        "cvssScore": 7.5,
+        "fixedIn": [
+          "2.15.4",
+          "2.16.1"
+        ],
+        "identifiers": {
+          "CVE": [
+            "CVE-2026-1001"
+          ],
+          "GHSA": [
+            "GHSA-aaaa-bbbb-cccc"
+          ],
+          "CWE": [
+            "CWE-502"
+          ]
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Deserialization of Untrusted Data",
+        "exploit": "Proof of Concept",
+        "from": [
+          "core@1.0.0",
+          "a:b@1",
+          "com.fasterxml.jackson.core:jackson-databind@2.15.2"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      },
+      {
+        "id": "SNYK-JAVA-COMFASTERXMLJACKSONCORE-7569538",
+        "packageName": "com.fasterxml.jackson.core:jackson-databind",
+        "version": "2.15.2",
+        "severity": "high",
+        "cvssScore": 7.5,
+        "fixedIn": [
+          "2.15.4",
+          "2.16.1"
+        ],
+        "identifiers": {
+          "CVE": [
+            "CVE-2026-1001"
+          ],
+          "GHSA": [
+            "GHSA-aaaa-bbbb-cccc"
+          ],
+          "CWE": [
+            "CWE-502"
+          ]
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Deserialization of Untrusted Data",
+        "exploit": "Proof of Concept",
+        "from": [
+          "core@1.0.0",
+          "c:d@1",
+          "com.fasterxml.jackson.core:jackson-databind@2.15.2"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      },
+      {
+        "id": "SNYK-JAVA-IONETTY-8000001",
+        "packageName": "io.netty:netty-codec-http2",
+        "version": "4.1.100.Final",
+        "severity": "medium",
+        "cvssScore": 5.3,
+        "fixedIn": [
+          "4.1.101.Final"
+        ],
+        "identifiers": {
+          "CVE": [],
+          "GHSA": [
+            "GHSA-dddd-eeee-ffff"
+          ],
+          "CWE": [
+            "CWE-400"
+          ]
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Denial of Service (DoS)",
+        "exploit": "Not Defined",
+        "from": [
+          "root@1.0.0",
+          "io.netty:netty-codec-http2@4.1.100.Final"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      },
+      {
+        "id": "SNYK-JAVA-ORGYAML-8000002",
+        "packageName": "org.yaml:snakeyaml",
+        "version": "1.33",
+        "severity": "critical",
+        "cvssScore": 9.8,
+        "fixedIn": [
+          "2.0"
+        ],
+        "identifiers": {
+          "CVE": [],
+          "GHSA": [],
+          "CWE": [
+            "CWE-20"
+          ]
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Arbitrary Code Execution",
+        "exploit": "Mature",
+        "from": [
+          "root@1.0.0",
+          "org.yaml:snakeyaml@1.33"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      }
+    ],
+    "ok": false,
+    "dependencyCount": 250,
+    "packageManager": "gradle",
+    "targetFile": "build.gradle",
+    "displayTargetFile": "build.gradle",
+    "path": "/work/repo",
+    "summary": "4 vulnerable paths"
+  },
+  {
+    "vulnerabilities": [
+      {
+        "id": "SNYK-JAVA-COMFASTERXMLJACKSONCORE-7569538",
+        "packageName": "com.fasterxml.jackson.core:jackson-databind",
+        "version": "2.15.2",
+        "severity": "high",
+        "cvssScore": 7.5,
+        "fixedIn": [
+          "2.15.4",
+          "2.16.1"
+        ],
+        "identifiers": {
+          "CVE": [
+            "CVE-2026-1001"
+          ],
+          "GHSA": [
+            "GHSA-aaaa-bbbb-cccc"
+          ],
+          "CWE": [
+            "CWE-502"
+          ]
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Deserialization of Untrusted Data",
+        "exploit": "Proof of Concept",
+        "from": [
+          "server@1.0.0",
+          "com.fasterxml.jackson.core:jackson-databind@2.15.2"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      },
+      {
+        "id": "SNYK-JAVA-COMFASTERXMLJACKSONCORE-7569538",
+        "packageName": "com.fasterxml.jackson.core:jackson-databind",
+        "version": "2.16.0",
+        "severity": "low",
+        "cvssScore": 3.1,
+        "fixedIn": [
+          "2.16.1"
+        ],
+        "identifiers": {
+          "CVE": [
+            "CVE-2026-1001"
+          ],
+          "GHSA": [],
+          "CWE": [
+            "CWE-502"
+          ]
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Deserialization of Untrusted Data",
+        "exploit": "Proof of Concept",
+        "from": [
+          "root@1.0.0",
+          "com.fasterxml.jackson.core:jackson-databind@2.16.0"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+        "dev": true
+      }
+    ],
+    "ok": false,
+    "dependencyCount": 120,
+    "packageManager": "gradle",
+    "targetFile": "server/build.gradle",
+    "displayTargetFile": "server/build.gradle",
+    "path": "/work/repo",
+    "summary": "2 vulnerable paths"
+  },
+  {
+    "ok": false,
+    "dependencyCount": 0,
+    "packageManager": "maven",
+    "targetFile": "legacy/pom.xml",
+    "displayTargetFile": "legacy/pom.xml",
+    "path": "/work/repo",
+    "error": "Failed to get dependencies for legacy/pom.xml: Could not resolve artifact",
+    "code": "SNYK-CLI-0008"
+  },
+  {
+    "vulnerabilities": [
+      {
+        "id": "SNYK-SWIFT-ALAMOFIRE-8000003",
+        "packageName": "Alamofire",
+        "version": "5.4.0",
+        "severity": "low",
+        "cvssScore": null,
+        "fixedIn": [],
+        "identifiers": {
+          "CVE": [
+            "CVE-2026-1003"
+          ],
+          "GHSA": [],
+          "CWE": []
+        },
+        "publicationTime": "2026-03-02T10:15:00.000Z",
+        "modificationTime": "2026-04-01T08:00:00.000Z",
+        "title": "Information Exposure",
+        "exploit": "Not Defined",
+        "from": [
+          "root@1.0.0",
+          "Alamofire@5.4.0"
+        ],
+        "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      }
+    ],
+    "ok": false,
+    "dependencyCount": 12,
+    "packageManager": "swift",
+    "targetFile": "ios/Package.swift",
+    "displayTargetFile": "ios/Package.swift",
+    "path": "/work/repo",
+    "summary": "1 vulnerable paths"
+  }
+]

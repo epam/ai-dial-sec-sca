@@ -16,7 +16,7 @@ These actions are called by the `sca_scheduled.yml` workflow of [epam/ai-dial-ci
 - `actions/sca_fix_plan` and `actions/sca_fix_apply`: the fixer, see Fixer below.
 - `src/sca/rules`: the rules the engine and the fixer share (package key, version order, upgrade target, fixed-in-development state of a record), see Shared rules below.
 
-The code is one Python distribution, `ai-dial-sec-sca` (`pyproject.toml`, import package `src/sca`, no runtime dependencies, Python 3.12): `sca.lib` (run context, output files), `sca.targets`, `sca.osv`, `sca.merge`, `sca.plan`, `sca.rules`, `sca.fix`. `pip install .` gives the `sca` command with the subcommands `targets`, `osv`, `merge` and `plan`; the composite actions do not install it, they run `python -P -m sca <command>` (`-P` keeps the checked-out workspace off the import path) with `PYTHONPATH` set to `src`, so the layout of the repository must stay as it is. The GitHub side is a standard-library script run by path, `actions/_github/github_adapter.py`; it is not part of the package, which prints no platform syntax.
+The code is one Python distribution, `ai-dial-sec-sca` (`pyproject.toml`, import package `src/sca`, no runtime dependencies, Python 3.12): `sca.lib` (run context, output files), `sca.targets`, `sca.osv`, `sca.merge`, `sca.plan`, `sca.rules`, `sca.fix`, `sca.imports`. `pip install .` gives the `sca` command with the subcommands `targets`, `osv`, `merge`, `plan` and `import`; the composite actions do not install it, they run `python -P -m sca <command>` (`-P` keeps the checked-out workspace off the import path) with `PYTHONPATH` set to `src`, so the layout of the repository must stay as it is. The GitHub side is a standard-library script run by path, `actions/_github/github_adapter.py`; it is not part of the package, which prints no platform syntax.
 
 ## Inputs
 
@@ -158,6 +158,10 @@ python -m pytest test/sca test/fix_plan test/fix_apply
 ```
 
 The tests need Python 3.12 and no network access. They run in GitHub Actions on every push and pull request to `main`.
+
+## Snyk import
+
+`sca import snyk --input snyk.json --repo OWNER/NAME --ref REF --commit SHA --out report.json [--snyk-version V]` converts the JSON of `snyk test --all-projects --json` (a list of projects, or one object) to a schema 4 `report.json` with one version, the given `ref` (kind `development`). Each Snyk project is a target `snyk:<targetFile>` (`scanner` `snyk`, `kind` `fs`, `packages_scanned` = `dependencyCount`); a project with an `error` is `failed` with the Snyk error code as `reason`. `vulns[]` has one record per (package, vulnerability) over all projects, dependency paths folded: `id` is the first CVE, else the first GHSA, else the Snyk id, `sources` is `["snyk"]`, `ecosystem` is the OSV name of the Snyk `packageManager` (`null` when unknown), and the additive fields `exploit` and `cwe` come from Snyk. `counts` are computed as in `sca merge`; `findings[]` is empty.
 
 ## report.json
 

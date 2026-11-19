@@ -1,0 +1,169 @@
+{
+ "schema_version": 4,
+ "engine": null,
+ "repo": "example/app",
+ "host": "github.com",
+ "commit_sha": "0123456789abcdef",
+ "default_branch": "development",
+ "run_id": "",
+ "run_attempt": null,
+ "run_url": "",
+ "generated_utc": "2026-11-19T05:30:00Z",
+ "tools": {
+  "trivy": null,
+  "trivy_db": null,
+  "trivy_java_db": null,
+  "osv_scanner": null,
+  "osv_queried_at": null,
+  "snyk": "1.1300.0"
+ },
+ "targets": [
+  {
+   "id": "snyk:requirements.txt",
+   "scanner": "snyk",
+   "kind": "fs",
+   "ref": "development",
+   "commit_sha": "0123456789abcdef",
+   "image": null,
+   "image_digest": null,
+   "status": "ok",
+   "reason": null,
+   "packages_scanned": 64,
+   "os": null
+  }
+ ],
+ "findings": [],
+ "versions": [
+  {
+   "ref": "development",
+   "kind": "development",
+   "latest": false,
+   "status": "ok",
+   "targets": [
+    "snyk:requirements.txt"
+   ],
+   "counts": {
+    "c": 0,
+    "h": 1,
+    "m": 1,
+    "l": 0,
+    "unknown": 1,
+    "all": 3,
+    "fixable": 2
+   },
+   "vulns": [
+    {
+     "id": "CVE-2026-3001",
+     "names": [
+      "CVE-2026-3001",
+      "GHSA-jjjj-kkkk-llll",
+      "SNYK-PYTHON-DJANGO-6000003"
+     ],
+     "pkg": "Django",
+     "pkg_key": "django",
+     "class": "lang",
+     "severity": "HIGH",
+     "fixed": "4.2.14, 5.0.7",
+     "dev": false,
+     "installed": [
+      "4.2.1"
+     ],
+     "where": [
+      "snyk:requirements.txt"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-10-30",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": 8.1,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [
+      "GHSA-jjjj-kkkk-llll",
+      "SNYK-PYTHON-DJANGO-6000003"
+     ],
+     "ecosystem": "PyPI",
+     "title": "SQL Injection",
+     "exploit": "Not Defined",
+     "cwe": [
+      "CWE-89"
+     ]
+    },
+    {
+     "id": "CVE-2026-3002",
+     "names": [
+      "CVE-2026-3002",
+      "SNYK-PYTHON-PILLOW-6000004"
+     ],
+     "pkg": "pillow",
+     "pkg_key": "pillow",
+     "class": "lang",
+     "severity": "MEDIUM",
+     "fixed": "10.0.1",
+     "dev": false,
+     "installed": [
+      "9.5.0"
+     ],
+     "where": [
+      "snyk:requirements.txt"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-03-02",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": 5.5,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [
+      "SNYK-PYTHON-PILLOW-6000004"
+     ],
+     "ecosystem": "PyPI",
+     "title": "Buffer Overflow",
+     "exploit": "Not Defined",
+     "cwe": [
+      "CWE-120"
+     ]
+    },
+    {
+     "id": "SNYK-PYTHON-REQUESTS-6000005",
+     "names": [
+      "SNYK-PYTHON-REQUESTS-6000005"
+     ],
+     "pkg": "Requests",
+     "pkg_key": "requests",
+     "class": "lang",
+     "severity": "UNKNOWN",
+     "fixed": "",
+     "dev": false,
+     "installed": [
+      "2.25.0"
+     ],
+     "where": [
+      "snyk:requirements.txt"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-03-02",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": null,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [],
+     "ecosystem": "PyPI",
+     "title": "Odd rating",
+     "exploit": null,
+     "cwe": []
+    }
+   ]
+  }
+ ]
+}

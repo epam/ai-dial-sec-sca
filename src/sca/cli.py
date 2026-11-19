@@ -16,6 +16,7 @@ COMMANDS = {
     "osv": ("sca.osv.query_osv", "query OSV for the packages Trivy found"),
     "merge": ("sca.merge.merge_results", "merge the scan parts into report.json"),
     "plan": ("sca.plan.cli", "plan the fixes from report.json files"),
+    "import": ("sca.imports.cli", "convert the report of another scanner (import snyk)"),
     "tools": ("sca.tools.cli", "install the tools of the scan (tools install)"),
 }
 

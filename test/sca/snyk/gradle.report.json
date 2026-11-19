@@ -1,0 +1,251 @@
+{
+ "schema_version": 4,
+ "engine": null,
+ "repo": "example/app",
+ "host": "github.com",
+ "commit_sha": "0123456789abcdef",
+ "default_branch": "development",
+ "run_id": "",
+ "run_attempt": null,
+ "run_url": "",
+ "generated_utc": "2026-11-19T05:30:00Z",
+ "tools": {
+  "trivy": null,
+  "trivy_db": null,
+  "trivy_java_db": null,
+  "osv_scanner": null,
+  "osv_queried_at": null,
+  "snyk": "1.1300.0"
+ },
+ "targets": [
+  {
+   "id": "snyk:build.gradle",
+   "scanner": "snyk",
+   "kind": "fs",
+   "ref": "development",
+   "commit_sha": "0123456789abcdef",
+   "image": null,
+   "image_digest": null,
+   "status": "ok",
+   "reason": null,
+   "packages_scanned": 250,
+   "os": null
+  },
+  {
+   "id": "snyk:server/build.gradle",
+   "scanner": "snyk",
+   "kind": "fs",
+   "ref": "development",
+   "commit_sha": "0123456789abcdef",
+   "image": null,
+   "image_digest": null,
+   "status": "ok",
+   "reason": null,
+   "packages_scanned": 120,
+   "os": null
+  },
+  {
+   "id": "snyk:legacy/pom.xml",
+   "scanner": "snyk",
+   "kind": "fs",
+   "ref": "development",
+   "commit_sha": "0123456789abcdef",
+   "image": null,
+   "image_digest": null,
+   "status": "failed",
+   "reason": "SNYK-CLI-0008",
+   "packages_scanned": 0,
+   "os": null
+  },
+  {
+   "id": "snyk:ios/Package.swift",
+   "scanner": "snyk",
+   "kind": "fs",
+   "ref": "development",
+   "commit_sha": "0123456789abcdef",
+   "image": null,
+   "image_digest": null,
+   "status": "ok",
+   "reason": null,
+   "packages_scanned": 12,
+   "os": null
+  }
+ ],
+ "findings": [],
+ "versions": [
+  {
+   "ref": "development",
+   "kind": "development",
+   "latest": false,
+   "status": "failed",
+   "targets": [
+    "snyk:build.gradle",
+    "snyk:ios/Package.swift",
+    "snyk:legacy/pom.xml",
+    "snyk:server/build.gradle"
+   ],
+   "counts": {
+    "c": 1,
+    "h": 1,
+    "m": 1,
+    "l": 1,
+    "unknown": 0,
+    "all": 4,
+    "fixable": 3
+   },
+   "vulns": [
+    {
+     "id": "CVE-2026-1003",
+     "names": [
+      "CVE-2026-1003",
+      "SNYK-SWIFT-ALAMOFIRE-8000003"
+     ],
+     "pkg": "Alamofire",
+     "pkg_key": "alamofire",
+     "class": "lang",
+     "severity": "LOW",
+     "fixed": "",
+     "dev": false,
+     "installed": [
+      "5.4.0"
+     ],
+     "where": [
+      "snyk:ios/Package.swift"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-03-02",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": null,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [
+      "SNYK-SWIFT-ALAMOFIRE-8000003"
+     ],
+     "ecosystem": null,
+     "title": "Information Exposure",
+     "exploit": "Not Defined",
+     "cwe": []
+    },
+    {
+     "id": "CVE-2026-1001",
+     "names": [
+      "CVE-2026-1001",
+      "GHSA-aaaa-bbbb-cccc",
+      "SNYK-JAVA-COMFASTERXMLJACKSONCORE-7569538"
+     ],
+     "pkg": "com.fasterxml.jackson.core:jackson-databind",
+     "pkg_key": "com-fasterxml-jackson-core:jackson-databind",
+     "class": "lang",
+     "severity": "HIGH",
+     "fixed": "2.15.4, 2.16.1",
+     "dev": false,
+     "installed": [
+      "2.15.2",
+      "2.16.0"
+     ],
+     "where": [
+      "snyk:build.gradle",
+      "snyk:server/build.gradle"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-03-02",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": 7.5,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [
+      "GHSA-aaaa-bbbb-cccc",
+      "SNYK-JAVA-COMFASTERXMLJACKSONCORE-7569538"
+     ],
+     "ecosystem": "Maven",
+     "title": "Deserialization of Untrusted Data",
+     "exploit": "Proof of Concept",
+     "cwe": [
+      "CWE-502"
+     ]
+    },
+    {
+     "id": "GHSA-dddd-eeee-ffff",
+     "names": [
+      "GHSA-dddd-eeee-ffff",
+      "SNYK-JAVA-IONETTY-8000001"
+     ],
+     "pkg": "io.netty:netty-codec-http2",
+     "pkg_key": "io-netty:netty-codec-http2",
+     "class": "lang",
+     "severity": "MEDIUM",
+     "fixed": "4.1.101.Final",
+     "dev": false,
+     "installed": [
+      "4.1.100.Final"
+     ],
+     "where": [
+      "snyk:build.gradle"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-03-02",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": 5.3,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [
+      "SNYK-JAVA-IONETTY-8000001"
+     ],
+     "ecosystem": "Maven",
+     "title": "Denial of Service (DoS)",
+     "exploit": "Not Defined",
+     "cwe": [
+      "CWE-400"
+     ]
+    },
+    {
+     "id": "SNYK-JAVA-ORGYAML-8000002",
+     "names": [
+      "SNYK-JAVA-ORGYAML-8000002"
+     ],
+     "pkg": "org.yaml:snakeyaml",
+     "pkg_key": "org-yaml:snakeyaml",
+     "class": "lang",
+     "severity": "CRITICAL",
+     "fixed": "2.0",
+     "dev": false,
+     "installed": [
+      "1.33"
+     ],
+     "where": [
+      "snyk:build.gradle"
+     ],
+     "sources": [
+      "snyk"
+     ],
+     "published": "2026-03-02",
+     "modified": "2026-04-01",
+     "cvss": {
+      "score": 9.8,
+      "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "source": "snyk"
+     },
+     "aliases": [],
+     "ecosystem": "Maven",
+     "title": "Arbitrary Code Execution",
+     "exploit": "Mature",
+     "cwe": [
+      "CWE-20"
+     ]
+    }
+   ]
+  }
+ ]
+}
