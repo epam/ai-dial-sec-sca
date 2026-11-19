@@ -118,6 +118,20 @@
           "org.yaml:snakeyaml@1.33"
         ],
         "CVSSv3": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      },
+      {
+        "id": "snyk:lic:maven:com.puppycrawl.tools:checkstyle:LGPL-2.1",
+        "type": "license",
+        "license": "LGPL-2.1",
+        "packageName": "com.puppycrawl.tools:checkstyle",
+        "version": "10.24.0",
+        "severity": "medium",
+        "title": "LGPL-2.1 license",
+        "identifiers": {},
+        "from": [
+          "x",
+          "com.puppycrawl.tools:checkstyle@10.24.0"
+        ]
       }
     ],
     "ok": false,

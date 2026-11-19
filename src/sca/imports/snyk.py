@@ -102,7 +102,8 @@ def convert(
     records: dict[tuple[str, str], dict[str, Any]] = {}
     for p in items:
         for v in p.get("vulnerabilities") or []:
-            fold(records, p, v)
+            if v.get("type") != "license":  # licence issues are not vulnerabilities
+                fold(records, p, v)
     vulns = [
         {**r, "fixed": ", ".join(r["fixed"]), "installed": sorted(r["installed"]), "where": sorted(r["where"])}
         for r in sorted(records.values(), key=lambda r: (r["pkg_key"], r["id"]))
