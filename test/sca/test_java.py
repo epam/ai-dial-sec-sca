@@ -1,6 +1,7 @@
 """``sca java``: the JDK per Gradle wrapper version."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,8 @@ def test_setup_missing_jdk(tmp_path: Path) -> None:
 
 
 def test_setup_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in [name for name in os.environ if name.startswith("JAVA_HOME_")]:
+        monkeypatch.delenv(name)
     for name, value in ENV.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("GRADLE_USER_HOME", str(tmp_path / "home"))
