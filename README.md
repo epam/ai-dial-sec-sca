@@ -147,11 +147,11 @@ include:
   - remote: https://raw.githubusercontent.com/epam/ai-dial-sec-sca/<40-char-commit-sha-or-tag>/gitlab/sca.gitlab-ci.yml
     integrity: sha256-<base64>   # curl -s URL | openssl dgst -sha256 -binary | openssl base64 -A
     inputs:
-      images: dial/ai-dial-document
+      images: my-app/images/my-app
       registry: artifactory.epam.com:6211
 ```
 
-Other inputs: `registry_user` and `registry_password` (default the CI variables `ARTIFACTORY_USER` and `ARTIFACTORY_PASS`; use a read-only credential; none is anonymous), `release_lines`, `engine` (pip requirement line, hash-checked with `--hash=`), `engine_ref`, `runner_tags`, `stage`. The job needs a Docker executor runner that reaches the registry (no Docker daemon is needed) and a full clone (`GIT_DEPTH: 0`; a shallow checkout fails the run). It runs on schedule, web, api and default-branch pushes (manually on merge requests). The artifacts `report.json`, `summary.md` and `sca-out/` of the job are what the notifier reads.
+Other inputs: `registry_user` and `registry_password` (default the CI variables `ARTIFACTORY_USER` and `ARTIFACTORY_PASS`; use a read-only credential; none is anonymous), `release_lines`, `engine` (pip requirement line, hash-checked with `--hash=`), `engine_ref`, `runner_tags`, `stage`. The job needs a Docker executor runner that reaches the registry (no Docker daemon is needed) and a full clone (`GIT_DEPTH: 0`; a shallow checkout fails the run). It runs on schedule, web, api and default-branch pushes (manually on merge requests). The artifacts `report.json`, `summary.md` and `sca-out/` of the job are what the notifier reads. Credential variables: masked and Raw (not expanded, so a `$` in the password survives); a protected variable is empty on unprotected branches and merge requests, and the job then reads the registry anonymously. Java sources are scanned without a JDK or build tool (no `sca java` step), so Gradle and Maven projects get less coverage than in the GitHub flow.
 
 ## Tools
 

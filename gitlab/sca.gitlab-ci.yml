@@ -78,7 +78,8 @@ sca-scan:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates > /dev/null
     - git fetch --quiet --tags --force origin "+refs/heads/$CI_DEFAULT_BRANCH:refs/remotes/origin/$CI_DEFAULT_BRANCH"
     # credentials are all or nothing; none is anonymous
-    - '[ -n "$SCA_REGISTRY_USER" ] && [ -n "$SCA_REGISTRY_PASSWORD" ] || unset SCA_REGISTRY_USER SCA_REGISTRY_PASSWORD'
+    # (a protected CI variable is empty on unprotected branches and MR pipelines)
+    - '[ -n "$SCA_REGISTRY_USER" ] && [ -n "$SCA_REGISTRY_PASSWORD" ] || { echo "registry credentials empty: anonymous registry access"; unset SCA_REGISTRY_USER SCA_REGISTRY_PASSWORD; }'
     - python -m venv /tmp/venv && printf "%s\n" "$SCA_ENGINE" > /tmp/engine.txt
     - |
       case "$SCA_ENGINE" in *--hash=*) pin=--require-hashes;; *) pin=;; esac
@@ -86,15 +87,19 @@ sca-scan:
     - export PATH=/tmp/venv/bin:$PATH TMPDIR=/tmp/sca-tmp && mkdir -p "$TMPDIR"
     - sca tools install --dir /tmp/sca-tools --output-dir /tmp/sca-step && export PATH=/tmp/sca-tools/bin:$PATH
     - sca db --cache-dir /tmp/trivy-cache --output-dir /tmp/sca-db
-    - sca targets --source git --repository "$CI_PROJECT_PATH" --default-branch "$CI_DEFAULT_BRANCH" --registry "$SCA_REGISTRY" --images "$(printf '%s\n' $SCA_IMAGES)" --release-lines "$SCA_RELEASE_LINES" --output-dir /tmp/sca-parts
+    - sca targets --source git --repository "$CI_PROJECT_PATH" --default-branch "$CI_DEFAULT_BRANCH" --registry "$SCA_REGISTRY" --images "$(printf '%s\n' "$SCA_IMAGES" | tr -s ' \t' '\n')" --release-lines "$SCA_RELEASE_LINES" --output-dir /tmp/sca-parts
     - |
       python3 -c 'import json; [print(t["id"], t["kind"], t["commit_sha"]) for t in json.load(open("/tmp/sca-parts/targets.json"))["targets"] if t["scanner"] == "trivy" and t["status"] == "pending"]' > /tmp/pending.txt
-      while read -r id kind sha; do
-        tree=
-        if [ "$kind" = fs ]; then tree=/tmp/src/$id; git worktree add --detach "$tree" "$sha" > /dev/null; fi
-        sca scan --targets-file /tmp/sca-parts/targets.json --target-id "$id" --kind "$kind" ${tree:+--tree "$tree"} --parts-dir /tmp/sca-parts --cache-dir /tmp/trivy-cache --registry "$SCA_REGISTRY" --output-dir "/tmp/sca-step/$id" || echo "target $id failed"
-        if [ -n "$tree" ]; then git worktree remove --force "$tree"; fi
-      done < /tmp/pending.txt
+      # targets on fd 3: children inherit stdin; a failed target never stops the loop
+      while read -r id kind sha <&3; do
+        tree= failed=
+        if [ "$kind" = fs ]; then
+          tree=/tmp/src/$id
+          git worktree add --detach "$tree" "$sha" > /dev/null || failed="checkout of $sha failed"
+        fi
+        sca scan --targets-file /tmp/sca-parts/targets.json --target-id "$id" --kind "$kind" ${tree:+--tree "$tree"} ${failed:+--failed "$failed"} --parts-dir /tmp/sca-parts --cache-dir /tmp/trivy-cache --registry "$SCA_REGISTRY" --output-dir "/tmp/sca-step/$id" < /dev/null || echo "target $id failed"
+        if [ -n "$tree" ]; then git worktree remove --force "$tree" || true; fi
+      done 3< /tmp/pending.txt
     - sca osv --targets-file /tmp/sca-parts/targets.json --parts-dir /tmp/sca-parts --output-dir /tmp/sca-parts --registry "$SCA_REGISTRY"
     - sca merge --targets-file /tmp/sca-parts/targets.json --parts-dir /tmp/sca-parts --output-dir sca-out --trivy-db-info "$(cat /tmp/sca-db/db-info.json)"
     - cp sca-out/report.json sca-out/summary.md . && cat summary.md
