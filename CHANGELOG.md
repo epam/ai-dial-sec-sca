@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `sca targets --source git --default-branch BRANCH`: the release set from the tags of the local git checkout, on any git host (`--repository` is the project path, nested groups allowed). The newest patch of a line is the highest version, a shallow checkout is refused, `SCA_REGISTRY_USER` and `SCA_REGISTRY_PASSWORD` are used to list the image tags. `--source github` stays the default.
+- `gitlab/sca.gitlab-ci.yml`: a GitLab CI include (`spec:inputs`) with the report-only job `sca-scan`, see GitLab in the README.
+
 ## v0.9.0
 
 Action inputs and outputs of the existing actions are unchanged, except the new optional inputs of `sca_query_osv`. New actions: `sca_tools`, `sca_db`, `sca_scan`.

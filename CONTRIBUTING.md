@@ -39,4 +39,4 @@ PR titles must follow the [Conventional Commits specification](https://www.conve
 
 ### Releases
 
-Releases are git tags `vX.Y.Z` on `main`. The consumer, the `sca_scheduled.yml` workflow in [epam/ai-dial-ci](https://github.com/epam/ai-dial-ci), pins all actions of this repository to one and the same tag. After tagging a new release, update that pin in `epam/ai-dial-ci` in a single change.
+Releases are git tags `vX.Y.Z` on `main`. The consumer, the `sca_scheduled.yml` workflow in [epam/ai-dial-ci](https://github.com/epam/ai-dial-ci), pins all actions of this repository to one and the same tag. After tagging a new release, update that pin in `epam/ai-dial-ci` in a single change. Also bump the defaults of `engine` and `engine_ref` in `gitlab/sca.gitlab-ci.yml` to the new release (wheel URL and its sha256 from `SHA256SUMS`).

@@ -2,7 +2,7 @@
 """Resolve the scan targets (source snapshot + container images) of one repository.
 
 Used by the SCA scheduled scan. Asks the GitHub REST API through ``gh api`` (token in
-``GH_TOKEN``) and the image registry through ``oras repo tags`` (both are on the
+``GH_TOKEN``; with ``--source git`` the local git checkout instead) and the image registry through ``oras repo tags`` (both are on the
 runner). Standard library only. The run (host, run id, URL, event, actor) comes from
 the ``SCA_RUN_*`` environment, see ``sca.lib.context``. Writes ``targets.json``,
 ``outputs.json`` (``matrix``, ``targets-file``) and ``annotations.json`` into the
@@ -32,6 +32,7 @@ from typing import Any, NamedTuple
 from sca.lib import dump_json
 from sca.lib.context import CommandError, RunContext, UsageError, read_run_context
 from sca.lib.outputs import Annotations, execute, note
+from sca.lib.registry import check_credentials
 
 GITHUB_API_VERSION = "2022-11-28"
 GHCR_HOST = "ghcr.io"
@@ -49,6 +50,8 @@ MAX_RELEASE_PAGES = 10
 _NAME_PART = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
 IMAGE_NAME = re.compile(rf"{_NAME_PART}(?:/{_NAME_PART})*", re.ASCII)
 REPOSITORY_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
+# a git host project path, nested groups allowed
+GIT_REPOSITORY_NAME = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", re.ASCII)
 UNSAFE_ID_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 # A client error (not rate limiting) will not go away by itself: no retry.
 PERMANENT_ERROR = re.compile(r"(?:HTTP|status code:?) (?!429)4\d\d", re.IGNORECASE)
@@ -104,6 +107,8 @@ def make_runner(
 class GitHubClient:
     """The GitHub REST API through ``gh api``."""
 
+    newest_by_version = False  # the patch of a line is the one released last
+
     def __init__(self, run: Runner, notes: Annotations) -> None:
         self._run = run
         self.notes = notes  # what the calls found worth telling, kept on failure too
@@ -155,15 +160,71 @@ class GitHubClient:
         return self._get(f"repos/{repo}/commits/refs/tags/{quoted}")["sha"]
 
 
+class GitClient:
+    """The local git checkout (the current directory) through ``git``, for any host:
+    what the resolver asks of GitHub, answered from the branch and the tags."""
+
+    newest_by_version = True  # tag dates are not reliable: retags, backports
+
+    def __init__(self, run: Runner, notes: Annotations, default_branch: str) -> None:
+        self._run = run
+        self.notes = notes
+        self._default_branch = default_branch
+
+    def _git(self, *args: str) -> str:
+        try:
+            return self._run(["git", *args], None).strip()
+        except ToolError as err:
+            raise ResolveError(f"git {args[0]} failed: {err}") from err
+
+    def default_branch(self, repo: str) -> str:
+        if self._git("rev-parse", "--is-shallow-repository") == "true":
+            raise ResolveError("the checkout is shallow: the tags are incomplete, fetch the full history")
+        return self._default_branch
+
+    def commit_sha(self, repo: str, ref: str) -> str:
+        """The commit of the remote branch, else of the local one (CI checkouts differ)."""
+        try:
+            return self._git("rev-parse", f"refs/remotes/origin/{ref}^{{commit}}")
+        except ResolveError:
+            return self._git("rev-parse", f"refs/heads/{ref}^{{commit}}")
+
+    def releases(self, repo: str) -> list[dict[str, Any]]:
+        """The tags, newest first; an ``X.Y.Z-pre`` tag is a prerelease."""
+        listing = self._git(
+            "for-each-ref",
+            "refs/tags",
+            "--sort=-creatordate",
+            "--format=%(refname:strip=2)%09%(creatordate:iso-strict)",
+        )
+        return [
+            {
+                "tag_name": tag,
+                "published_at": date,
+                "draft": False,
+                "prerelease": prerelease_version(tag) is not None,
+            }
+            for tag, date in (line.split("\t") for line in listing.splitlines())
+        ]
+
+    def tag_commit_sha(self, repo: str, tag: str) -> str:
+        return self._git("rev-parse", f"refs/tags/{tag}^{{commit}}")
+
+
 class RegistryClient:
     """Lists image tags with ``oras repo tags`` (any OCI registry)."""
 
     def __init__(
-        self, run: Runner, registry: str, github_token: str | None = None
+        self,
+        run: Runner,
+        registry: str,
+        github_token: str | None = None,
+        credentials: tuple[str, str] | None = None,
     ) -> None:
         self.registry = registry
         self._run = run
         self._github_token = github_token
+        self._credentials = credentials
 
     def tags(self, image: str) -> list[str]:
         """All tags of an image; raises ResolveError on any failure."""
@@ -173,8 +234,12 @@ class RegistryClient:
             repository = f"library/{image}"
         argv = ["oras", "repo", "tags"]
         stdin = None
-        # Credentials go to ghcr.io only; every other registry is asked anonymously.
-        if self._github_token and host == GHCR_HOST:
+        # The GitHub token goes to ghcr.io only; any other registry is asked
+        # anonymously, unless the run has registry credentials (SCA_REGISTRY_*).
+        if self._credentials:
+            user, stdin = self._credentials
+            argv += ["--username", user, "--password-stdin"]
+        elif self._github_token and host == GHCR_HOST:
             argv += ["--username", "github-actions", "--password-stdin"]
             stdin = self._github_token
         try:
@@ -295,11 +360,11 @@ def prerelease_version(tag: str) -> tuple[tuple[int, int, int], tuple] | None:
 
 
 def resolve_release_set(
-    github: GitHubClient, repository: str, release_lines: int
+    github: GitHubClient | GitClient, repository: str, release_lines: int
 ) -> ReleaseSet:
     """The releases to scan, read from the flags the repository sets: a stable is
     a release with ``prerelease`` and ``draft`` false, drafts are ignored. A line's
-    patch is its stable published last, so a hotfix lifts the patch, not the line.
+    patch is its stable published last (a git source: the highest version), so a hotfix lifts the patch, not the line.
 
     The candidate is the newest prerelease by version (not by date) that is ahead of
     every stable: its base version is greater than the newest stable's. A prerelease
@@ -322,7 +387,11 @@ def resolve_release_set(
             newest_stable = max(newest_stable, version)
             current = stables_by_line.get(line)
             # first seen wins a tie: GitHub returns the releases newest first
-            if current is None or release.published_at > current.published_at:
+            if current is None or (
+                version > stable_version(current.tag)
+                if github.newest_by_version
+                else release.published_at > current.published_at
+            ):
                 stables_by_line[line] = release
         else:
             unmatched.append(release)
@@ -400,7 +469,7 @@ def resolve_image_targets(
 
 
 def resolve_release_source_target(
-    github: GitHubClient, repository: str, release: Release
+    github: GitHubClient | GitClient, repository: str, release: Release
 ) -> dict[str, Any]:
     """The source target of one release: the repository at its git tag, so that
     repositories without images have a release scan too."""
@@ -436,7 +505,7 @@ def resolve_focus_image_targets(
 
 
 def resolve_focus_targets(
-    github: GitHubClient,
+    github: GitHubClient | GitClient,
     registry: RegistryClient,
     repository: str,
     images: Sequence[str],
@@ -474,11 +543,20 @@ class Inputs:
     token: str | None = None
     scan_tag: str | None = None
     force_image_scan: bool = False
+    source: str = "github"
+    default_branch: str | None = None
 
     @classmethod
     def from_args(cls, args: argparse.Namespace, token: str | None) -> Inputs:
         """Read the arguments of the command (``parse_args``) and the API token."""
-        if not REPOSITORY_NAME.fullmatch(args.repository):
+        if args.source == "git":
+            if not args.default_branch:
+                raise UsageError("--default-branch is required with --source git")
+            if not GIT_REPOSITORY_NAME.fullmatch(args.repository):
+                raise UsageError(
+                    f"repository must be a project path, got {args.repository!r}"
+                )
+        elif not REPOSITORY_NAME.fullmatch(args.repository):
             raise UsageError(
                 f"repository must be 'owner/name', got {args.repository!r}"
             )
@@ -500,11 +578,13 @@ class Inputs:
             token=token,
             scan_tag=args.scan_tag.strip() or None,
             force_image_scan=args.force_image_scan.strip().lower() == "true",
+            source=args.source,
+            default_branch=args.default_branch or None,
         )
 
 
 def resolve_release_targets(
-    github: GitHubClient,
+    github: GitHubClient | GitClient,
     registry: RegistryClient,
     repository: str,
     images: Sequence[str],
@@ -553,7 +633,7 @@ def resolve_release_targets(
 
 def resolve_targets(
     inputs: Inputs,
-    github: GitHubClient,
+    github: GitHubClient | GitClient,
     registry: RegistryClient,
     context: RunContext,
 ) -> dict[str, Any]:
@@ -660,12 +740,19 @@ def run(
     context = read_run_context(environ)
     inputs = Inputs.from_args(args, environ.get("GH_TOKEN") or None)
     run_tool = runner or make_runner(inputs.token)
-    github = GitHubClient(run_tool, notes)
+    git = inputs.source == "git"
+    source = (
+        GitClient(run_tool, notes, inputs.default_branch or "")
+        if git
+        else GitHubClient(run_tool, notes)
+    )
     try:
+        # no GitHub token on another host: the registry credentials are SCA_REGISTRY_*
+        credentials = check_credentials(environ) if git else None
         targets_doc = resolve_targets(
             inputs,
-            github,
-            RegistryClient(run_tool, inputs.registry, inputs.token),
+            source,
+            RegistryClient(run_tool, inputs.registry, inputs.token, credentials),
             context,
         )
     except ResolveError as err:
@@ -691,7 +778,9 @@ def parse_args(
     argv: Sequence[str] | None = None, prog: str | None = None
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog=prog, description=(__doc__ or "").splitlines()[0])
-    parser.add_argument("--repository", required=True, help="owner/name")
+    parser.add_argument("--repository", required=True, help="owner/name (git: project path)")
+    parser.add_argument("--source", choices=("github", "git"), default="github")
+    parser.add_argument("--default-branch", help="required with --source git")
     parser.add_argument("--registry", default=GHCR_HOST)
     parser.add_argument("--images", default="", help="image names, one per line")
     parser.add_argument("--osv-image-scan", default="true", help="true or false")
