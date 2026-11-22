@@ -23,15 +23,15 @@ spec:
       type: string
       default: "2"
       description: How many newest minor release lines are scanned (one latest patch each), plus the newest release candidate if any
-    # The default is bumped with each release of the engine (the release checklist in CONTRIBUTING.md); the engine
-    # must have `sca targets --source git`
+    # The default is the engine of this release (bumped by the release commit, CONTRIBUTING.md). A wheel hash cannot be
+    # known before the release is built; pin the release wheel with --hash= here for the strongest supply-chain pin
     engine:
       type: string
-      default: "ai-dial-sec-sca @ https://github.com/epam/ai-dial-sec-sca/releases/download/v0.10.0/ai_dial_sec_sca-0.10.0-py3-none-any.whl --hash=sha256:e9b5270c3225b80609cf8a642d8cc23effa0da5787be98025d92f6bba738cf8c"
+      default: "ai-dial-sec-sca @ git+https://github.com/epam/ai-dial-sec-sca@v0.11.0"
       description: Requirement line of the engine for pip; with --hash= it is installed with hash checking
     engine_ref:
       type: string
-      default: v0.10.0
+      default: v0.11.0
       description: Ref of the engine shown in the report
     runner_tags:
       type: array
