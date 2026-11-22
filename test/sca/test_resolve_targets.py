@@ -1742,3 +1742,157 @@ def test_run_writes_the_forced_image_scan_to_targets_json(tmp_path: Path) -> Non
     rt.run(args, ENV, [], t)
     doc = json.loads((tmp_path / "out" / "targets.json").read_text(encoding="utf-8"))
     assert doc["forced_image_scan"] is True
+
+
+# --- git source ---------------------------------------------------------------
+
+GIT_REPOSITORY = "Group/Sub/app"
+TAG_LISTING = "".join(
+    f"{tag}\t{date}\n"
+    for tag, date in [
+        ("2.1.0-rc1", "2025-04-01T00:00:00+00:00"),
+        ("2.0.3", "2025-03-01T00:00:00+00:00"),
+        ("1.9.0", "2025-02-01T00:00:00+00:00"),
+        ("2.0.0", "2025-01-01T00:00:00+00:00"),
+        ("build-7", "2024-12-01T00:00:00+00:00"),
+    ]
+)
+
+
+def tags_listing(*tags: tuple[str, str]) -> str:
+    return "".join(f"{tag}\t{date}\n" for tag, date in tags)
+
+
+class FakeGit:
+    """Stands in for ``git`` and ``oras``: routes the arguments after the program to a
+    canned output (an exception is raised); a list of git tags is routed by name."""
+
+    def __init__(
+        self, branch: bool = True, remote: bool = True, shallow: bool = False, listing: str = TAG_LISTING
+    ) -> None:
+        self.shallow, self.listing = shallow, listing
+        self.calls: list[list[str]] = []
+        self.remote, self.branch = remote, branch
+
+    def __call__(self, argv: Sequence[str], stdin: str | None = None) -> str:
+        self.calls.append(list(argv))
+        if argv[0] == "oras":
+            return tags_out(["development", "2.0.3", "1.9.0"])
+        if argv[1] == "for-each-ref":
+            return self.listing
+        if argv[2] == "--is-shallow-repository":
+            return "true" if self.shallow else "false"
+        ref = argv[2]
+        if ref.startswith("refs/tags/"):
+            return ("t" * 40 if not ref.startswith("refs/tags/2.0.3") else "c" * 40) + "\n"
+        if (ref.startswith("refs/remotes/origin/") and self.remote) or (
+            ref.startswith("refs/heads/") and self.branch
+        ):
+            return SHA + "\n"
+        raise rt.ToolError("fatal: bad revision")
+
+
+def git_parse(output_dir: Path, *extra: str) -> argparse.Namespace:
+    return rt.parse_args(
+        ["--source", "git", "--repository", GIT_REPOSITORY, "--default-branch", "main",
+         "--output-dir", str(output_dir), *extra]
+    )  # fmt: skip
+
+
+def test_git_source_resolves_the_release_set_from_tags(tmp_path: Path) -> None:
+    git = FakeGit()
+    notes: list[dict[str, Any]] = []
+    rt.run(git_parse(tmp_path, "--images", "x\n", "--registry", "r.example:6211"), ENV, notes, git)
+    doc = json.loads((tmp_path / "targets.json").read_text(encoding="utf-8"))
+    assert doc["repo"] == GIT_REPOSITORY
+    assert doc["default_branch"] == "main"
+    assert doc["commit_sha"] == SHA
+    assert list(trivy(doc)) == [
+        "source-main",
+        "source-2.0.3",
+        "source-1.9.0",
+        "source-2.1.0-rc1",
+        "x-development",
+        "x-2.0.3",
+        "x-1.9.0",
+        "x-2.1.0-rc1",
+    ]
+    targets = trivy(doc)
+    assert targets["source-2.0.3"]["commit_sha"] == "c" * 40
+    assert targets["x-2.1.0-rc1"]["status"] == "not_applicable"
+    assert doc["targets"][0]["ref"] is None
+    assert [n["title"] for n in notes if "Releases outside" in n["title"]] == [
+        "Releases outside the X.Y.Z lines"
+    ]
+    assert ["git", "for-each-ref", "refs/tags"] in [c[:3] for c in git.calls]
+
+
+def test_git_source_falls_back_to_the_local_branch(tmp_path: Path) -> None:
+    client = rt.GitClient(FakeGit(remote=False), [], "main")
+    assert client.commit_sha(GIT_REPOSITORY, "main") == SHA
+
+
+def test_git_source_a_missing_branch_is_a_resolve_error() -> None:
+    client = rt.GitClient(FakeGit(remote=False, branch=False), [], "main")
+    with pytest.raises(rt.ResolveError, match="git rev-parse failed"):
+        client.commit_sha(GIT_REPOSITORY, "main")
+
+
+def test_git_source_releases_have_the_github_item_shape() -> None:
+    items = rt.GitClient(FakeGit(), [], "main").releases(GIT_REPOSITORY)
+    assert items[0] == {
+        "tag_name": "2.1.0-rc1",
+        "published_at": "2025-04-01T00:00:00+00:00",
+        "draft": False,
+        "prerelease": True,
+    }
+    assert [i["prerelease"] for i in items] == [True, False, False, False, False]
+
+
+def test_git_source_requires_the_default_branch(tmp_path: Path) -> None:
+    args = rt.parse_args(["--source", "git", "--repository", GIT_REPOSITORY])
+    with pytest.raises(UsageError, match="--default-branch"):
+        rt.run(args, ENV, [], FakeGit())
+
+
+def test_git_source_repository_is_a_project_path(tmp_path: Path) -> None:
+    args = git_parse(tmp_path, "--repository", "nope")
+    with pytest.raises(UsageError, match="project path"):
+        rt.run(args, ENV, [], FakeGit())
+
+
+def test_git_source_lists_registry_tags_with_the_registry_credentials(tmp_path: Path) -> None:
+    git = FakeGit()
+    env = {**ENV, "SCA_REGISTRY_USER": "u", "SCA_REGISTRY_PASSWORD": "p"}
+    seen: list[tuple[list[str], str | None]] = []
+
+    def spy(argv: Sequence[str], stdin: str | None = None) -> str:
+        seen.append((list(argv), stdin))
+        return git(argv, stdin)
+
+    rt.run(git_parse(tmp_path, "--images", "x\n", "--registry", "r.example:6211"), env, [], spy)
+    argv, stdin = next(c for c in seen if c[0][0] == "oras")
+    assert argv == ["oras", "repo", "tags", "--username", "u", "--password-stdin", "r.example:6211/x"]
+    assert stdin == "p"
+
+
+def test_the_github_source_does_not_read_the_registry_credentials(tmp_path: Path) -> None:
+    t = FakeRunner()
+    github_routes(t, [])
+    t.add(tags_url("example/x", "r.example:6211"), tags_out(["development"]))
+    env = {**ENV, "SCA_REGISTRY_USER": "u", "SCA_REGISTRY_PASSWORD": "p"}
+    rt.run(parse(tmp_path, "--images", "example/x\n", "--registry", "r.example:6211"), env, [], t)
+    assert t.calls[-1] == (["oras", "repo", "tags", "r.example:6211/example/x"], None)
+
+
+def test_git_source_takes_the_highest_patch_of_a_line_not_the_newest_tag() -> None:
+    listing = tags_listing(("0.2.1", "2025-05-01T00:00:00+00:00"), ("0.2.2", "2025-04-01T00:00:00+00:00"))
+    client = rt.GitClient(FakeGit(listing=listing), [], "main")
+    release_set = rt.resolve_release_set(client, GIT_REPOSITORY, 1)
+    assert [r.tag for r in release_set.stables] == ["0.2.2"]
+
+
+def test_git_source_refuses_a_shallow_checkout() -> None:
+    client = rt.GitClient(FakeGit(shallow=True), [], "main")
+    with pytest.raises(rt.ResolveError, match="shallow"):
+        client.default_branch(GIT_REPOSITORY)

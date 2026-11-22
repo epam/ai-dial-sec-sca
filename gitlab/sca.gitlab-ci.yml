@@ -1,0 +1,113 @@
+# SCA scan of a GitLab project: the scheduled scan of the GitHub flow (targets, Trivy per target, OSV, merge) in one
+# job. Report-only (allow_failure). Include it from the project, see "GitLab" in README.md.
+spec:
+  inputs:
+    images:
+      type: string
+      default: ""
+      description: Image paths under the registry (no registry, no tag), one per line or space separated. Empty means source scan only
+    registry:
+      type: string
+      default: artifactory.epam.com:6211
+      description: Container registry the images are pulled from
+    # Use a read-only (pull and list) registry credential for the scan, not the one that pushes images
+    registry_user:
+      type: string
+      default: $ARTIFACTORY_USER
+      description: Registry user; a CI variable name to expand at runtime ($NAME) or a value. Empty user and password mean anonymous
+    registry_password:
+      type: string
+      default: $ARTIFACTORY_PASS
+      description: Registry password, as registry_user
+    release_lines:
+      type: string
+      default: "2"
+      description: How many newest minor release lines are scanned (one latest patch each), plus the newest release candidate if any
+    # The default is bumped with each release of the engine (the release checklist in CONTRIBUTING.md); the engine
+    # must have `sca targets --source git`
+    engine:
+      type: string
+      default: "ai-dial-sec-sca @ https://github.com/epam/ai-dial-sec-sca/releases/download/v0.10.0/ai_dial_sec_sca-0.10.0-py3-none-any.whl --hash=sha256:e9b5270c3225b80609cf8a642d8cc23effa0da5787be98025d92f6bba738cf8c"
+      description: Requirement line of the engine for pip; with --hash= it is installed with hash checking
+    engine_ref:
+      type: string
+      default: v0.10.0
+      description: Ref of the engine shown in the report
+    runner_tags:
+      type: array
+      default: [AWS, DockerExecutor]
+      description: Tags of a Docker executor runner that reaches the registry (no Docker daemon is needed)
+    stage:
+      type: string
+      default: .post
+---
+# the notifier reads the artifacts of the job by this name
+sca-scan:
+  stage: $[[ inputs.stage ]]
+  tags: $[[ inputs.runner_tags ]]
+  image: python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+  needs: []
+  allow_failure: true
+  interruptible: true
+  timeout: 45m
+  resource_group: sca-scan
+  rules:
+    - if: $CI_PIPELINE_SOURCE =~ /^(schedule|web|api)$/
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+  variables:
+    GIT_DEPTH: "0"
+    TRIVY_DB_REPOSITORY: "mirror.gcr.io/aquasec/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2"
+    TRIVY_JAVA_DB_REPOSITORY: "mirror.gcr.io/aquasec/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1"
+    SCA_REGISTRY_USER: $[[ inputs.registry_user ]]
+    SCA_REGISTRY_PASSWORD: $[[ inputs.registry_password ]]
+    SCA_RUN_HOST: $CI_SERVER_HOST
+    SCA_RUN_REPO: $CI_PROJECT_PATH
+    SCA_RUN_ID: $CI_PIPELINE_ID
+    SCA_RUN_URL: $CI_PIPELINE_URL
+    SCA_RUN_EVENT: $CI_PIPELINE_SOURCE
+    SCA_RUN_ACTOR: $GITLAB_USER_LOGIN
+    SCA_RUN_ENGINE_REF: $[[ inputs.engine_ref ]]
+    SCA_ENGINE: $[[ inputs.engine ]]
+    SCA_IMAGES: $[[ inputs.images ]]
+    SCA_REGISTRY: $[[ inputs.registry ]]
+    SCA_RELEASE_LINES: $[[ inputs.release_lines ]]
+  script:
+    - set -eu
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates > /dev/null
+    - git fetch --quiet --tags --force origin "+refs/heads/$CI_DEFAULT_BRANCH:refs/remotes/origin/$CI_DEFAULT_BRANCH"
+    # credentials are all or nothing; none is anonymous
+    # (a protected CI variable is empty on unprotected branches and MR pipelines)
+    - '[ -n "$SCA_REGISTRY_USER" ] && [ -n "$SCA_REGISTRY_PASSWORD" ] || { echo "registry credentials empty: anonymous registry access"; unset SCA_REGISTRY_USER SCA_REGISTRY_PASSWORD; }'
+    - python -m venv /tmp/venv && printf "%s\n" "$SCA_ENGINE" > /tmp/engine.txt
+    - |
+      case "$SCA_ENGINE" in *--hash=*) pin=--require-hashes;; *) pin=;; esac
+      /tmp/venv/bin/pip install -q $pin --no-deps -r /tmp/engine.txt
+    - export PATH=/tmp/venv/bin:$PATH TMPDIR=/tmp/sca-tmp && mkdir -p "$TMPDIR"
+    - sca tools install --dir /tmp/sca-tools --output-dir /tmp/sca-step && export PATH=/tmp/sca-tools/bin:$PATH
+    - sca db --cache-dir /tmp/trivy-cache --output-dir /tmp/sca-db
+    - sca targets --source git --repository "$CI_PROJECT_PATH" --default-branch "$CI_DEFAULT_BRANCH" --registry "$SCA_REGISTRY" --images "$(printf '%s\n' "$SCA_IMAGES" | tr -s ' \t' '\n')" --release-lines "$SCA_RELEASE_LINES" --output-dir /tmp/sca-parts
+    - |
+      python3 -c 'import json; [print(t["id"], t["kind"], t["commit_sha"]) for t in json.load(open("/tmp/sca-parts/targets.json"))["targets"] if t["scanner"] == "trivy" and t["status"] == "pending"]' > /tmp/pending.txt
+      # targets on fd 3: children inherit stdin; a failed target never stops the loop
+      while read -r id kind sha <&3; do
+        tree= failed=
+        if [ "$kind" = fs ]; then
+          tree=/tmp/src/$id
+          git worktree add --detach "$tree" "$sha" > /dev/null || failed="checkout of $sha failed"
+        fi
+        sca scan --targets-file /tmp/sca-parts/targets.json --target-id "$id" --kind "$kind" ${tree:+--tree "$tree"} ${failed:+--failed "$failed"} --parts-dir /tmp/sca-parts --cache-dir /tmp/trivy-cache --registry "$SCA_REGISTRY" --output-dir "/tmp/sca-step/$id" < /dev/null || echo "target $id failed"
+        if [ -n "$tree" ]; then git worktree remove --force "$tree" || true; fi
+      done 3< /tmp/pending.txt
+    - sca osv --targets-file /tmp/sca-parts/targets.json --parts-dir /tmp/sca-parts --output-dir /tmp/sca-parts --registry "$SCA_REGISTRY"
+    - sca merge --targets-file /tmp/sca-parts/targets.json --parts-dir /tmp/sca-parts --output-dir sca-out --trivy-db-info "$(cat /tmp/sca-db/db-info.json)"
+    - cp sca-out/report.json sca-out/summary.md . && cat summary.md
+    - python3 -c 'import json, sys; sys.exit(json.load(open("sca-out/outputs.json"))["outputs"]["failed-count"] > 0)'
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - report.json
+      - summary.md
+      - sca-out/
