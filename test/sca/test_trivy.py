@@ -31,6 +31,7 @@ class FakeTrivy:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.fail: set[str] = set()  # subcommands or flags that exit 1
+        self.once: set[str] = set()  # flags that exit 1 on the first call only
         self.output = json.dumps(RESULT)  # what a scan writes
         self.explode = False
 
@@ -49,6 +50,9 @@ class FakeTrivy:
         if self.explode and verb in ("fs", "image"):
             raise OSError("disk gone")
         failed = verb in self.fail or any(a in self.fail for a in argv)
+        if flaky := self.once.intersection(argv):
+            failed = True
+            self.once -= flaky
         out = ""
         if verb == "version":
             out = json.dumps(DB_INFO)
@@ -62,6 +66,8 @@ class FakeTrivy:
 def fake(monkeypatch):
     trivy = FakeTrivy()
     monkeypatch.setattr("sca.trivy.subprocess.run", trivy)
+    trivy.sleeps = []
+    monkeypatch.setattr("sca.lib.retry.time.sleep", trivy.sleeps.append)
     for name in ("TRIVY_DB_REPOSITORY", "TRIVY_JAVA_DB_REPOSITORY", "SCA_REGISTRY_USER", "SCA_REGISTRY_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
     return trivy
@@ -149,7 +155,7 @@ def test_db_info_is_what_merge_reads(fake, tmp_path, run_env):
 
 
 @pytest.mark.parametrize(
-    "fails, calls", [("--download-db-only", 1), ("--download-java-db-only", 2), ("version", 3)]
+    "fails, calls", [("--download-db-only", 3), ("--download-java-db-only", 4), ("version", 3)]
 )
 def test_db_failure_is_an_error_without_info(fake, tmp_path, fails, calls):
     fake.fail = {fails}
@@ -413,3 +419,10 @@ def test_missing_arguments_exit_2(command):
     with pytest.raises(SystemExit) as exit_:
         cli.main([command])
     assert exit_.value.code == 2
+
+
+def test_db_download_is_retried_with_long_pauses(fake, tmp_path):
+    fake.once = {"--download-db-only"}
+    assert db(tmp_path) == 0
+    assert [c["argv"][1:] for c in fake.calls].count(["image", "--download-db-only"]) == 2
+    assert fake.sleeps == [30]

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Network retries are gentle: 3 attempts, pauses of 30 s and 90 s, one line on stderr per retry. `sca tools install` (downloads) and `sca db` (each Trivy database download, which was not retried) use them; `gitlab/sca.gitlab-ci.yml` runs `apt-get` with `Acquire::Retries=3`.
+
 ## v0.11.0
 
 ### Added

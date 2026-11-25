@@ -75,7 +75,7 @@ sca-scan:
     SCA_RELEASE_LINES: $[[ inputs.release_lines ]]
   script:
     - set -eu
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates > /dev/null
+    - apt-get -o Acquire::Retries=3 update -qq && apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends git ca-certificates > /dev/null
     - git fetch --quiet --tags --force origin "+refs/heads/$CI_DEFAULT_BRANCH:refs/remotes/origin/$CI_DEFAULT_BRANCH"
     # credentials are all or nothing; none is anonymous
     # (a protected CI variable is empty on unprotected branches and MR pipelines)

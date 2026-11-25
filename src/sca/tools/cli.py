@@ -12,7 +12,6 @@ import re
 import shutil
 import tarfile
 import tempfile
-import time
 import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
@@ -20,10 +19,10 @@ from typing import Any, BinaryIO
 
 from sca.lib.context import CommandError, UsageError
 from sca.lib.outputs import Annotations, execute
+from sca.lib.retry import PAUSES, pause
 
 from . import pins
 
-ATTEMPTS = 3
 DOWNLOADS, BIN = "downloads", "bin"
 CHUNK = 1 << 20
 TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
@@ -44,15 +43,15 @@ def current_platform() -> str:
 
 def fetch(url: str, target: Path) -> None:
     """Download ``url`` to ``target``, a few attempts."""
-    for attempt in range(1, ATTEMPTS + 1):
+    for attempt in range(1, len(PAUSES) + 2):
         try:
             with urllib.request.urlopen(url, timeout=60) as response, target.open("wb") as f:
                 shutil.copyfileobj(response, f, CHUNK)
             return
         except (OSError, http.client.HTTPException) as error:
-            if attempt == ATTEMPTS:
+            if attempt > len(PAUSES):
                 raise CommandError(f"cannot download {url}: {error}") from error
-            time.sleep(2 * attempt)
+            pause(url, attempt, error)
 
 
 def sha256_of(f: BinaryIO) -> str:

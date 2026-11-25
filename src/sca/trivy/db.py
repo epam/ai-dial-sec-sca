@@ -20,6 +20,7 @@ from typing import Any
 from sca.lib import dump_json
 from sca.lib.context import CommandError
 from sca.lib.outputs import Annotations, execute
+from sca.lib.retry import PAUSES, pause
 
 from . import DB_REPOSITORY, JAVA_DB_REPOSITORY, isolated, trivy
 
@@ -56,8 +57,13 @@ def main(argv: Sequence[str] | None = None, prog: str | None = None) -> int:
         }
         with isolated() as apart:
             for flag in DOWNLOADS:
-                if (done := trivy(["image", flag], env | apart)).returncode:
-                    raise CommandError(f"trivy image {flag} failed (exit {done.returncode})")
+                for attempt in range(1, len(PAUSES) + 2):
+                    if not (done := trivy(["image", flag], env | apart)).returncode:
+                        break
+                    error = f"trivy image {flag} failed (exit {done.returncode})"
+                    if attempt > len(PAUSES):
+                        raise CommandError(error)
+                    pause(f"trivy image {flag}", attempt, f"exit {done.returncode}")
             done = trivy(["version", "--format", "json"], env | apart, capture=True)
         if done.returncode:
             raise CommandError(f"trivy version failed (exit {done.returncode})")

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from sca import cli
+from sca.lib import retry
 from sca.tools import cli as tools_cli
 from sca.tools import pins
 
@@ -332,15 +333,31 @@ def test_a_failed_install_still_writes_the_annotation(tmp_path, served) -> None:
     assert [n["level"] for n in notes] == ["error"] and "sha256" in notes[0]["message"]
 
 
-def test_a_download_is_retried_on_an_http_error(monkeypatch, tmp_path) -> None:
-    calls = []
+def test_a_download_is_retried_on_an_http_error(monkeypatch, tmp_path, capsys) -> None:
+    calls, sleeps = [], []
 
     def urlopen(url, timeout):
         calls.append(url)
         raise tools_cli.http.client.IncompleteRead(b"")
 
     monkeypatch.setattr(tools_cli.urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(tools_cli.time, "sleep", lambda _: None)
+    monkeypatch.setattr(retry.time, "sleep", sleeps.append)
     with pytest.raises(tools_cli.CommandError, match="cannot download"):
         tools_cli.fetch("https://example.test/x", tmp_path / "x")
-    assert len(calls) == tools_cli.ATTEMPTS
+    assert len(calls) == 3 and sleeps == [30, 90]
+    assert capsys.readouterr().err.count("https://example.test/x: attempt") == 2
+
+
+def test_a_download_succeeds_after_one_failure(monkeypatch, tmp_path) -> None:
+    calls, sleeps = [], []
+
+    def urlopen(url, timeout):
+        calls.append(url)
+        if len(calls) == 1:
+            raise ConnectionResetError("Connection died")
+        return io.BytesIO(b"data")
+
+    monkeypatch.setattr(tools_cli.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(retry.time, "sleep", sleeps.append)
+    tools_cli.fetch("https://example.test/x", tmp_path / "x")
+    assert (tmp_path / "x").read_bytes() == b"data" and len(calls) == 2 and sleeps == [30]
