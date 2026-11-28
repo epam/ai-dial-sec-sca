@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Network retries are gentle: 3 attempts, pauses of 30 s and 90 s, one line on stderr per retry. `sca tools install` (downloads) and `sca db` (each Trivy database download, which was not retried) use them; `gitlab/sca.gitlab-ci.yml` runs `apt-get` with `Acquire::Retries=3`. The `generate_gradle_lockfiles` action repeats Gradle the same way, only when its log shows a repository outage or rate limit (429, 5xx, timeout); a 429 from Maven Central failed `source-0.51.0-rc.0` of ai-dial-core on 2026-11-28.
+
 ## v0.11.0
 
 ### Added
