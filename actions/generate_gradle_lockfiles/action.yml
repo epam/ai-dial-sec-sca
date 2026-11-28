@@ -45,8 +45,18 @@ runs:
         printf '%s' "$choice" | jq -r .reason
         export JAVA_HOME=$(printf '%s' "$choice" | jq -r .java_home)
         export PATH="$JAVA_HOME/bin:$PATH"
-        ./gradlew --no-daemon --init-script "$GITHUB_ACTION_PATH/../../src/sca/gradle/lockfiles.init.gradle" -Pai.dial.sca.graphDir="$GRAPH_DIR" resolveAndLockAllConfigurations --write-locks \
-          || { echo "::error::Gradle failed to resolve dependencies"; exit 1; }
+        # 3 attempts with pauses of 30 s and 90 s, only when the log shows a repository outage or rate limit (429, 5xx, timeout)
+        log=$(mktemp)
+        for pause in 30 90 0; do
+          rm -f "$GRAPH_DIR"/*.json
+          ./gradlew --no-daemon --init-script "$GITHUB_ACTION_PATH/../../src/sca/gradle/lockfiles.init.gradle" -Pai.dial.sca.graphDir="$GRAPH_DIR" resolveAndLockAllConfigurations --write-locks 2>&1 | tee "$log"
+          [ "${PIPESTATUS[0]}" -eq 0 ] && break
+          if [ "$pause" -eq 0 ] || ! grep -qE 'status code (429|5[0-9][0-9])|Could not GET|Read timed out|Connect timed out|Connection reset|Remote host terminated' "$log"; then
+            echo "::error::Gradle failed to resolve dependencies"; exit 1
+          fi
+          echo "Gradle: network failure, retry in $pause s" >&2
+          sleep "$pause"
+        done
         count=$(find . -name gradle.lockfile -type f | wc -l)
         echo "Generated lockfiles: $count"
         if [ "$count" -eq 0 ]; then
